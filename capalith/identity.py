@@ -19,7 +19,7 @@ _FileEntry = tuple[str, bytes, int, str, _Metadata]
 
 
 class BundleEntryError(Exception):
-    """Raised when a bundle entry is unsupported or changes while hashing."""
+    """Raised when a skill entry is unsupported or changes while being read."""
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ def artifact_id(source_id: str, bundle_path: str) -> str:
 
 
 def _entry_error(path: Path, reason: str) -> BundleEntryError:
-    return BundleEntryError(f"unsupported or unstable bundle entry {path!s}: {reason}")
+    return BundleEntryError(f"cannot use {path!s}: {reason}")
 
 
 def _metadata(file_stat: os.stat_result) -> _Metadata:
@@ -241,7 +241,7 @@ def _hash_bundle_descriptor(
             current_root = os.fstat(root_descriptor)
             _require_directory(bundle_root, current_root)
             if root_metadata != _metadata(current_root):
-                raise _entry_error(bundle_root, "bundle root changed while being inspected")
+                raise _entry_error(bundle_root, "skill directory changed while being read")
 
             directories: list[_DirectoryRecord] = [
                 ("", b"", root_descriptor, root_metadata)
@@ -279,7 +279,7 @@ def _hash_bundle_descriptor(
             final_root_path_stat = os.stat(bundle_root, follow_symlinks=False)
             _require_directory(bundle_root, final_root_path_stat)
             if root_metadata != _metadata(final_root_path_stat):
-                raise _entry_error(bundle_root, "bundle root changed while being hashed")
+                raise _entry_error(bundle_root, "skill directory changed while being read")
             return BundleManifest(
                 digest=f"sha256:{bundle_hash.hexdigest()}",
                 files=records,
@@ -288,7 +288,7 @@ def _hash_bundle_descriptor(
         except BundleEntryError:
             raise
         except OSError as error:
-            raise BundleEntryError(f"could not inspect bundle entry: {error}") from error
+            raise BundleEntryError(f"could not read skill files: {error}") from error
     finally:
         for descriptor in reversed(directory_descriptors[1:]):
             try:
@@ -313,13 +313,13 @@ def hash_bundle(bundle_root: Path) -> BundleManifest:
         root_path_stat = os.stat(bundle_root, follow_symlinks=False)
         _require_directory(bundle_root, root_path_stat)
         if root_metadata != _metadata(root_path_stat):
-            raise _entry_error(bundle_root, "bundle root changed while being inspected")
+            raise _entry_error(bundle_root, "skill directory changed while being read")
 
         return _hash_bundle_descriptor(bundle_root, root_descriptor, root_metadata)
     except BundleEntryError:
         raise
     except OSError as error:
-        raise BundleEntryError(f"could not inspect bundle entry: {error}") from error
+        raise BundleEntryError(f"could not read skill files: {error}") from error
     finally:
         if root_descriptor is not None:
             try:

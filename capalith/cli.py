@@ -280,7 +280,7 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
                 command_arguments[3] if len(command_arguments) == 4 else None,
             )
         else:
-            parser.error("invalid command arguments; use --help for command forms")
+            parser.error("invalid command arguments; run 'capalith --help' for command forms")
     except sqlite3.Error:
         print("database operation failed", file=stderr)
         return 1

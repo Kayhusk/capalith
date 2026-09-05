@@ -282,7 +282,7 @@ class StoreTests(unittest.TestCase):
             )
             for locator in invalid_locators:
                 with self.subTest(locator=locator):
-                    with self.assertRaisesRegex(StoreError, r"^invalid Git source locator$"):
+                    with self.assertRaisesRegex(StoreError, r"^invalid Git source URL$"):
                         store.add_git_source(locator, "refs/heads/main")
 
             invalid_refs = (
@@ -296,7 +296,9 @@ class StoreTests(unittest.TestCase):
             )
             for requested_ref in invalid_refs:
                 with self.subTest(requested_ref=requested_ref):
-                    with self.assertRaisesRegex(StoreError, r"^invalid Git requested ref$"):
+                    with self.assertRaisesRegex(
+                        StoreError, r"^invalid Git branch or tag reference$"
+                    ):
                         store.add_git_source(
                             "https://example.com/org/repo.git", requested_ref
                         )

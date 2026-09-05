@@ -109,7 +109,7 @@ def _stage_git_source(
         or requested_ref is None
         or not requested_ref.startswith(("refs/heads/", "refs/tags/"))
     ):
-        raise StoreError("could not validate Git requested ref")
+        raise StoreError("could not validate Git branch or tag reference")
 
     with tempfile.TemporaryDirectory(prefix="capalith-git-") as temp_dir:
         staging = Path(temp_dir)
@@ -140,13 +140,13 @@ def _stage_git_source(
             ["check-ref-format", requested_ref],
             environment,
             10,
-            "could not validate Git requested ref",
+            "could not validate Git branch or tag reference",
         )
         advertisement = _run_git(
             ["ls-remote", "--refs", "--exit-code", source.locator, requested_ref],
             environment,
             10,
-            "could not look up Git requested ref",
+            "could not look up Git branch or tag reference",
         )
         expected_suffix = b"\t" + requested_ref.encode("utf-8") + b"\n"
         advertised_oid = advertisement[: -len(expected_suffix)]
@@ -155,7 +155,7 @@ def _stage_git_source(
             or len(advertised_oid) not in (40, 64)
             or re.fullmatch(rb"[0-9A-Fa-f]+", advertised_oid) is None
         ):
-            raise StoreError("could not look up Git requested ref")
+            raise StoreError("could not look up Git branch or tag reference")
         object_format = "sha1" if len(advertised_oid) == 40 else "sha256"
 
         repository = staging / "repo.git"
@@ -163,7 +163,7 @@ def _stage_git_source(
             ["init", "--bare", f"--object-format={object_format}", str(repository)],
             environment,
             10,
-            "could not initialize Git staging repository",
+            "could not initialize temporary Git repository",
         )
         _run_git(
             [
@@ -179,7 +179,7 @@ def _stage_git_source(
             ],
             environment,
             60,
-            "could not fetch Git requested ref",
+            "could not fetch Git branch or tag reference",
         )
         resolved = _run_git(
             [
@@ -213,7 +213,7 @@ def _stage_git_source(
             ],
             environment,
             10,
-            "could not inspect fetched Git tree",
+            "could not inspect fetched Git files",
         )
         tree_records: list[tuple[bytes, bytes, tuple[str, ...]]] = []
         tree_paths: set[tuple[str, ...]] = set()
@@ -225,13 +225,13 @@ def _stage_git_source(
         }
         if tree:
             if not tree.endswith(b"\0"):
-                raise StoreError("could not inspect fetched Git tree")
+                raise StoreError("could not inspect fetched Git files")
             for record in tree[:-1].split(b"\0"):
                 try:
                     header, raw_path = record.split(b"\t", 1)
                     mode, object_type, object_id = header.split(b" ")
                 except ValueError as error:
-                    raise StoreError("could not inspect fetched Git tree") from error
+                    raise StoreError("could not inspect fetched Git files") from error
                 if (
                     not raw_path
                     or not mode
@@ -241,16 +241,16 @@ def _stage_git_source(
                     or mode not in expected_object_types
                     or object_type != expected_object_types[mode]
                 ):
-                    raise StoreError("could not inspect fetched Git tree")
+                    raise StoreError("could not inspect fetched Git files")
                 try:
                     path_parts = tuple(raw_path.decode("utf-8").split("/"))
                 except UnicodeDecodeError as error:
-                    raise StoreError("could not inspect fetched Git tree") from error
+                    raise StoreError("could not inspect fetched Git files") from error
                 if (
                     any(part in ("", ".", "..") for part in path_parts)
                     or path_parts in tree_paths
                 ):
-                    raise StoreError("could not inspect fetched Git tree")
+                    raise StoreError("could not inspect fetched Git files")
                 tree_paths.add(path_parts)
                 tree_records.append((mode, object_id, path_parts))
 
@@ -259,7 +259,7 @@ def _stage_git_source(
             for path_parts in tree_paths
             for index in range(1, len(path_parts))
         ):
-            raise StoreError("could not inspect fetched Git tree")
+            raise StoreError("could not inspect fetched Git files")
 
         unsupported_paths = tuple(
             path_parts
@@ -267,7 +267,7 @@ def _stage_git_source(
             if mode in (b"120000", b"160000")
         )
         if any(path_parts[-1] == "SKILL.md" for path_parts in unsupported_paths):
-            raise StoreError("unsupported Git bundle entry")
+            raise StoreError("Git skill contains a symbolic link or submodule")
 
         materialized = staging / "materialized"
         materialized_descriptors: list[int] = []
@@ -280,7 +280,7 @@ def _stage_git_source(
             )
             materialized_descriptors.append(materialized_descriptor)
             if not stat.S_ISDIR(os.fstat(materialized_descriptor).st_mode):
-                raise StoreError("could not read fetched Git blob")
+                raise StoreError("could not read fetched Git file")
             directories: dict[tuple[str, ...], int] = {
                 (): materialized_descriptor
             }
@@ -303,7 +303,7 @@ def _stage_git_source(
                     )
                     materialized_descriptors.append(directory_descriptor)
                     if not stat.S_ISDIR(os.fstat(directory_descriptor).st_mode):
-                        raise StoreError("could not read fetched Git blob")
+                        raise StoreError("could not read fetched Git file")
                     directories[key] = directory_descriptor
 
                 parent_descriptor = directories[parent_parts]
@@ -319,7 +319,7 @@ def _stage_git_source(
                 )
                 try:
                     if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
-                        raise StoreError("could not read fetched Git blob")
+                        raise StoreError("could not read fetched Git file")
                     _run_git(
                         [
                             "--git-dir",
@@ -330,7 +330,7 @@ def _stage_git_source(
                         ],
                         environment,
                         10,
-                        "could not read fetched Git blob",
+                        "could not read fetched Git file",
                         stdout_descriptor=file_descriptor,
                     )
                     os.fchmod(
@@ -341,7 +341,7 @@ def _stage_git_source(
         except StoreError:
             raise
         except OSError as error:
-            raise StoreError("could not read fetched Git blob") from error
+            raise StoreError("could not read fetched Git file") from error
         finally:
             _close_descriptors(materialized_descriptors)
 
@@ -354,7 +354,7 @@ def _stage_git_source(
                     and path_parts[: len(bundle_parts)] == bundle_parts
                     for path_parts in unsupported_paths
                 ):
-                    raise StoreError("unsupported Git bundle entry")
+                    raise StoreError("Git skill contains a symbolic link or submodule")
             observations = tuple(
                 _observe_bundle(
                     source.id,
@@ -375,7 +375,7 @@ def _encoded(value: str, path: Path) -> bytes:
     try:
         return value.encode("utf-8")
     except UnicodeEncodeError as error:
-        raise BundleEntryError(f"unsupported bundle entry name: {path}") from error
+        raise BundleEntryError(f"path is not valid UTF-8: {path}") from error
 
 
 def _close_descriptors(descriptors: list[int]) -> None:
@@ -392,10 +392,10 @@ def _discover(source_root: Path) -> _Discovery:
     try:
         supplied_stat = os.lstat(supplied)
         if stat.S_ISLNK(supplied_stat.st_mode):
-            raise BundleEntryError(f"local source root cannot be a symlink: {supplied}")
+            raise BundleEntryError(f"local source directory cannot be a symlink: {supplied}")
         if not stat.S_ISDIR(supplied_stat.st_mode):
             raise BundleEntryError(
-                f"local source root must be an existing directory: {supplied}"
+                f"local source directory must be an existing directory: {supplied}"
             )
 
         root = supplied.resolve(strict=True)
@@ -414,14 +414,14 @@ def _discover(source_root: Path) -> _Discovery:
             stat.S_IFMT(root_stat.st_mode),
         ):
             raise BundleEntryError(
-                f"local source root changed while being discovered: {supplied}"
+                f"local source directory changed while being discovered: {supplied}"
             )
         root_metadata = _metadata(root_stat)
         root_path_stat = os.stat(root, follow_symlinks=False)
         _require_directory(root, root_path_stat)
         if root_metadata != _metadata(root_path_stat):
             raise BundleEntryError(
-                f"local source root changed while being discovered: {supplied}"
+                f"local source directory changed while being discovered: {supplied}"
             )
 
         directories: list[_OpenBundle] = [(".", root_descriptor, root_metadata)]
@@ -470,7 +470,7 @@ def _discover(source_root: Path) -> _Discovery:
         raise
     except (OSError, ValueError) as error:
         _close_descriptors(descriptors)
-        raise BundleEntryError(f"could not inspect local source root: {supplied}") from error
+        raise BundleEntryError(f"could not inspect local source directory: {supplied}") from error
 
 
 def discover_bundle_roots(source_root: Path) -> tuple[Path, ...]:
@@ -496,7 +496,7 @@ def _verify_bundle_paths(
         _require_directory(root, source_path_stat)
         if _metadata(source_stat) != _metadata(source_path_stat):
             raise BundleEntryError(
-                f"local source root changed while being scanned: {root}"
+                f"local source directory changed while being scanned: {root}"
             )
 
         for relative, _descriptor, expected_metadata in bundles:
@@ -513,7 +513,7 @@ def _verify_bundle_paths(
                 _require_directory(root / relative, final_stat)
                 if expected_metadata != _metadata(final_stat):
                     raise BundleEntryError(
-                        f"bundle path changed while being scanned: {root / relative}"
+                        f"skill path changed during scan: {root / relative}"
                     )
             finally:
                 _close_descriptors(opened)
@@ -555,7 +555,7 @@ def scan_git_source(
     try:
         revision, observations = _stage_git_source(source)
     except (BundleEntryError, CatalogError) as error:
-        raise StoreError("could not inspect fetched Git bundle") from error
+        raise StoreError("could not inspect skill files from Git source") from error
     absent = store.apply_scan(source_id, observations, revision)
     return ScanResult(source_id, len(observations), absent), revision
 
@@ -565,7 +565,7 @@ def review_git_source(store: Store, source_id: str) -> GitReviewReport:
     try:
         observed_revision, observations = _stage_git_source(source)
     except (BundleEntryError, CatalogError) as error:
-        raise StoreError("could not inspect fetched Git bundle") from error
+        raise StoreError("could not inspect skill files from Git source") from error
 
     stored = store.git_source_snapshot(source_id)
     if stored.source != source or observed_revision.requested_ref != source.requested_ref:

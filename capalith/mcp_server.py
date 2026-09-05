@@ -37,20 +37,37 @@ _INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "discover": {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "minLength": 1},
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Natural-language task to search for.",
+            },
             "source_ids": {
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
                 "uniqueItems": True,
+                "description": "Sources to search, in priority order.",
             },
-            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 5},
-            "offset": {"type": "integer", "minimum": 0, "default": 0},
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "default": 5,
+                "description": "Maximum results per page.",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "Number of results to skip.",
+            },
             "view_id": {
                 "anyOf": [
                     {"type": "string", "pattern": "^d1:[0-9a-f]{64}$"},
                     {"type": "null"},
                 ],
                 "default": None,
+                "description": "View ID returned by an earlier page of the same search.",
             },
         },
         "required": ["query"],
@@ -59,9 +76,20 @@ _INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "inspect": {
         "type": "object",
         "properties": {
-            "artifact_id": {"type": "string", "minLength": 1},
-            "content_digest": {"type": "string", "pattern": _DIGEST_PATTERN},
-            "resource_path": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+            "artifact_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Artifact ID returned by Capalith.",
+            },
+            "content_digest": {
+                "type": "string",
+                "pattern": _DIGEST_PATTERN,
+                "description": "Content digest paired with the artifact ID.",
+            },
+            "resource_path": {
+                "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}],
+                "description": "Stored relative path to read; omit it to list resources.",
+            },
         },
         "required": ["artifact_id", "content_digest"],
         "additionalProperties": False,
@@ -69,31 +97,60 @@ _INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "traverse": {
         "type": "object",
         "properties": {
-            "artifact_id": {"type": "string", "minLength": 1},
-            "content_digest": {"type": "string", "pattern": _DIGEST_PATTERN},
+            "artifact_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Starting artifact ID returned by Capalith.",
+            },
+            "content_digest": {
+                "type": "string",
+                "pattern": _DIGEST_PATTERN,
+                "description": "Content digest paired with the starting artifact ID.",
+            },
             "source_ids": {
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
                 "uniqueItems": True,
+                "description": "Enabled sources to include, in priority order.",
             },
             "relationship_types": {
                 "type": "array",
                 "items": {"enum": _RELATIONSHIP_TYPES},
                 "uniqueItems": True,
+                "description": "Relationship types to follow.",
             },
             "direction": {
                 "enum": ["outbound", "inbound", "both"],
                 "default": "outbound",
+                "description": "Direction to follow relationships.",
             },
-            "depth": {"type": "integer", "minimum": 1, "maximum": 3, "default": 1},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
-            "offset": {"type": "integer", "minimum": 0, "default": 0},
+            "depth": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3,
+                "default": 1,
+                "description": "Maximum relationship depth.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 10,
+                "description": "Maximum results per page.",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "Number of results to skip.",
+            },
             "view_id": {
                 "anyOf": [
                     {"type": "string", "pattern": "^t1:[0-9a-f]{64}$"},
                     {"type": "null"},
                 ],
                 "default": None,
+                "description": "View ID returned by an earlier page of the same traversal.",
             },
         },
         "required": ["artifact_id", "content_digest"],
@@ -114,10 +171,10 @@ _TOOLS = [
         annotations=_READ_ONLY,
     )
     for name, description in (
-        ("discover", "Find skills that match a natural-language query."),
-        ("inspect", "Read one stored skill or resource."),
-        ("traverse", "Follow declared relationships from one skill."),
-        ("config_show", "Show Capalith's read-only configuration."),
+        ("discover", "Search the latest scanned Agent Skills for a task description."),
+        ("inspect", "Return stored metadata, a resource list, or one resource for an artifact version."),
+        ("traverse", "Return declared relationships for an artifact version."),
+        ("config_show", "Return configured sources, source states, and Capalith features."),
     )
 ]
 _VALIDATORS = {

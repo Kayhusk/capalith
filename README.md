@@ -32,6 +32,8 @@ python3 -m pip install --require-hashes -r requirements.txt
 PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 ```
 
+These tests cover package and MCP protocol behavior. They do not verify integration with a specific host, remote access, deployment, or package publication.
+
 The semantic model is local. It converts skill text and queries into vectors so related wording can match when BM25 does not. `fastembed` runs the pinned ONNX model on the CPU.
 
 Download and verify the model once:
@@ -128,16 +130,6 @@ The server exposes `discover`, `inspect`, `traverse`, and `config_show` as struc
 Capalith ranks BM25 and semantic matches separately, then combines the rankings. Exact names can still match below the semantic similarity threshold. If semantic search cannot run safely, SQLite BM25 handles the full query.
 
 Only enabled sources are searched. Newer registrations win name collisions by default. Callers can pass an ordered list of source IDs to choose which sources to search and their priority. Capalith does not decide when an agent should search, load selected content through a host, or run an LLM.
-
-## Development checks
-
-Run the warning-strict suite for repository changes:
-
-```bash
-PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
-```
-
-These tests do not prove compatibility with a specific host, remote access, deployment, or package publication.
 
 ## Limits
 

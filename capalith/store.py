@@ -505,16 +505,16 @@ class Store:
     def validate_local_source(self, locator: Path) -> Path:
         supplied = Path(locator)
         if supplied.is_symlink():
-            raise StoreError(f"local source root cannot be a symlink: {supplied}")
+            raise StoreError(f"local source directory cannot be a symlink: {supplied}")
         if not supplied.exists() or not supplied.is_dir():
-            raise StoreError(f"local source root must be an existing directory: {supplied}")
+            raise StoreError(f"local source directory must be an existing directory: {supplied}")
         try:
             root = supplied.resolve(strict=True)
             database = self.path.resolve(strict=False)
         except OSError as error:
-            raise StoreError(f"could not resolve local source root: {supplied}") from error
+            raise StoreError(f"could not resolve local source directory: {supplied}") from error
         if database == root or database.is_relative_to(root):
-            raise StoreError("database cannot be equal to or beneath the local source root")
+            raise StoreError("database must be outside the local source directory")
         return root
 
     def validate_git_source(self, locator: str, requested_ref: str) -> None:
@@ -551,7 +551,7 @@ class Store:
             else:
                 raise ValueError
         except (UnicodeError, ValueError):
-            raise StoreError("invalid Git source locator") from None
+            raise StoreError("invalid Git source URL") from None
 
         try:
             if type(requested_ref) is not str:
@@ -578,7 +578,7 @@ class Store:
             ):
                 raise ValueError
         except (UnicodeError, ValueError):
-            raise StoreError("invalid Git requested ref") from None
+            raise StoreError("invalid Git branch or tag reference") from None
 
     def initialize(self) -> None:
         if self.read_only:
@@ -1952,8 +1952,8 @@ class Store:
                         ),
                         fts_query(tokens),
                     )
-                    # Bound the common query. If continuation reaches that bound,
-                    # rerun it without the limit so no matching ID is omitted.
+                    # Run the limited query first. If it exceeds _LEXICAL_MATCH_LIMIT,
+                    # rerun without a limit so pagination cannot omit matches.
                     raw_lexical_rows = connection.execute(
                         lexical_sql + " LIMIT ?",
                         (*lexical_parameters, _LEXICAL_MATCH_LIMIT + 1),

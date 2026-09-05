@@ -15,7 +15,7 @@ Optional input:
 - `source_ids`: unique source IDs in the selected priority order.
 - `limit`: 1 through 50. The default is 5.
 - `offset`: a non-negative page offset. The default is 0.
-- `view_id`: the `d1:` identifier returned by the first page when continuing that result set.
+- `view_id`: the `d1:` identifier returned by an earlier page of the same result set.
 
 Read only the fields needed for the task:
 
@@ -25,7 +25,9 @@ Read only the fields needed for the task:
 - `recommendation.uncertainty`: skills missing from the search index, invalid metadata or files, unresolved requirements, conflicts, or cycles.
 - `retrieval.has_more`, `retrieval.next_offset`, and `retrieval.view_id`: pagination fields.
 
-Request another page only when needed. Send the same `query` and `source_ids` with the returned `next_offset` and `view_id`. Changing the query, selected sources, catalog, retrieval method, model, or ranking rules can make the view stale. On `stale_view`, start again at offset 0 without the old view ID.
+Request another page only when needed. Send the same `query` and `source_ids` with the returned `next_offset` and `view_id`.
+
+Changing the query, selected sources, catalog, retrieval method, model, or ranking rules can make the view stale. On `stale_view`, start again at offset 0 without the old view ID.
 
 An empty candidate page is valid. Do not add sources unless the user or task permits it.
 
@@ -60,9 +62,11 @@ Optional input:
 - `depth`: 1 through 3. The default is 1.
 - `limit`: 1 through 100. The default is 10.
 - `offset`: a non-negative page offset.
-- `view_id`: the `t1:` identifier returned by the first traversal page.
+- `view_id`: the `t1:` identifier returned by an earlier page of the same traversal.
 
-Request another relationship page only when needed. Keep the starting `artifact_id`, `content_digest`, selected sources, relationship filters, direction, and depth unchanged. Send the returned `next_offset` and `view_id`. Keep any missing or ambiguous relationship information. Do not infer an artifact ID from a target name.
+Request another relationship page only when needed. Keep the starting `artifact_id`, `content_digest`, selected sources, relationship filters, direction, and depth unchanged. Send the returned `next_offset` and `view_id`.
+
+Keep any missing or ambiguous relationship information. Do not infer an artifact ID from a target name.
 
 ## `config_show`
 

@@ -170,7 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "command",
         choices=("provision", "verify"),
-        help="download and verify the model, or verify existing files",
+        help="provision downloads and verifies the pinned model; verify checks local files",
     )
     arguments = parser.parse_args(argv)
     try:
