@@ -1,0 +1,18 @@
+# Local secrets and Python artifacts
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+*.sqlite3
+
+# Local Hermes workspace state
+/.hermes/

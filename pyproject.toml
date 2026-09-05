@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capalith"
+dynamic = ["version"]
+description = "Local-first catalog for portable agent skills."
+readme = "PACKAGE.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [{ name = "Edward Bowie" }]
+classifiers = [
+    "Private :: Do Not Upload",
+    "Development Status :: 3 - Alpha",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "PyYAML==6.0.3",
+    "anyio==4.14.2",
+    "jsonschema==4.26.0",
+    "mcp==2.1.1",
+    "mcp-types==2.1.1",
+    "pydantic==2.13.5",
+]
+
+[project.optional-dependencies]
+semantic = [
+    "fastembed==0.8.0",
+    "huggingface-hub==1.29.0",
+]
+
+[project.scripts]
+capalith = "capalith.cli:main"
+capalith-mcp = "capalith.mcp_server:main"
+
+[tool.setuptools]
+packages = ["capalith"]
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = { attr = "capalith.__version__" }
+
+[tool.setuptools.package-data]
+capalith = [
+    "skills/capalith/SKILL.md",
+    "skills/capalith/references/*.md",
+]
