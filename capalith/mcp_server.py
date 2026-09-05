@@ -114,10 +114,10 @@ _TOOLS = [
         annotations=_READ_ONLY,
     )
     for name, description in (
-        ("discover", "Find current catalog artifacts for a natural-language query."),
-        ("inspect", "Inspect one exact artifact or stored resource."),
-        ("traverse", "Traverse declared relationships from one exact artifact."),
-        ("config_show", "Show the current read-only Capalith configuration report."),
+        ("discover", "Find skills that match a natural-language query."),
+        ("inspect", "Read one stored skill or resource."),
+        ("traverse", "Follow declared relationships from one skill."),
+        ("config_show", "Show Capalith's read-only configuration."),
     )
 ]
 _VALIDATORS = {
@@ -248,8 +248,11 @@ async def _serve(database: Path) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python3 -m capalith.mcp_server")
-    parser.add_argument("--db", type=Path, required=True)
+    parser = argparse.ArgumentParser(
+        prog="capalith-mcp",
+        description="Run Capalith's read-only MCP server over stdio.",
+    )
+    parser.add_argument("--db", type=Path, required=True, metavar="PATH", help="catalog database path")
     arguments = parser.parse_args(argv)
     try:
         anyio.run(_serve, Path(os.path.abspath(arguments.db)))

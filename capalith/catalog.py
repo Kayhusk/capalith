@@ -342,7 +342,7 @@ def _recommend(
 ) -> dict[str, object]:
     order: list[tuple[str, str]] = []
     state: dict[tuple[str, str], int] = {}
-    reasons = {primary_key: "primary search match"}
+    reasons = {primary_key: "best search match"}
     requirements: dict[tuple[str, str], list[dict[str, object]]] = {}
     uncertainty = _coverage_uncertainty(coverage)
     blocked = bool(coverage["missing"]["count"])
@@ -477,9 +477,11 @@ def _coverage_uncertainty(
 ) -> list[str]:
     uncertainty: list[str] = []
     if coverage["missing"]["count"]:
-        uncertainty.append("catalog coverage is incomplete; rescan missing artifacts")
+        uncertainty.append(
+            "some stored skills are missing from the search index; scan their sources again"
+        )
     if coverage["invalid"]["count"]:
-        uncertainty.append("invalid catalog artifacts are not searchable")
+        uncertainty.append("skills with invalid metadata or files are not searchable")
     return uncertainty
 
 
@@ -611,7 +613,7 @@ def _read_manifest_file(bundle_descriptor: int, file: FileRecord) -> bytes:
         descriptors.append(descriptor)
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
-            raise CatalogError("catalog bytes changed during scan")
+            raise CatalogError("bundle files changed during scan")
         chunks: list[bytes] = []
         while True:
             chunk = os.read(descriptor, 1024 * 1024)
@@ -629,12 +631,12 @@ def _read_manifest_file(bundle_descriptor: int, file: FileRecord) -> bytes:
             or file.executable != bool(after.st_mode & 0o111)
             or file.sha256 != f"sha256:{hashlib.sha256(content).hexdigest()}"
         ):
-            raise CatalogError("catalog bytes changed during scan")
+            raise CatalogError("bundle files changed during scan")
         return content
     except CatalogError:
         raise
     except OSError as error:
-        raise CatalogError("catalog bytes changed during scan") from error
+        raise CatalogError("bundle files changed during scan") from error
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)

@@ -14,7 +14,7 @@
       "license": "MIT",
       "license_file": "pyyaml-6.0.3.dist-info/licenses/LICENSE",
       "name": "PyYAML",
-      "purpose": "Parse Agent Skills YAML frontmatter with yaml.safe_load",
+      "purpose": "Parse YAML frontmatter in Agent Skills safely",
       "requires_python": ">=3.8",
       "runtime_dependencies": [],
       "source": "https://github.com/yaml/pyyaml",
@@ -30,7 +30,7 @@
       "license": "Apache-2.0",
       "license_file": "fastembed-0.8.0.dist-info/licenses/LICENSE",
       "name": "fastembed",
-      "purpose": "Run the pinned local ONNX semantic embedding model for vocabulary-mismatch retrieval",
+      "purpose": "Run the pinned local ONNX model for semantic search",
       "requires_python": ">=3.10,<3.14",
       "runtime_dependencies": [
         "anyio==4.14.2",
@@ -73,7 +73,7 @@
       "license": "MIT",
       "license_file": "mcp-2.1.1.dist-info/licenses/LICENSE",
       "name": "mcp",
-      "purpose": "Expose the governed catalog through the host-neutral read-only stdio MCP protocol",
+      "purpose": "Expose Capalith's read-only tools through MCP over stdio",
       "requires_python": ">=3.10",
       "runtime_dependencies": [
         "annotated-types==0.8.0",

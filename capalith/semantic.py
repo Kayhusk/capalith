@@ -58,11 +58,11 @@ def _verify_model_directory(directory: Path) -> Path:
     for relative, expected in MODEL_FILES.items():
         path = directory / relative
         if not path.is_file():
-            raise SemanticUnavailable(f"semantic model artifact failed verification: {relative}")
+            raise SemanticUnavailable(f"semantic model file failed verification: {relative}")
         with path.open("rb") as file:
             actual = hashlib.file_digest(file, "sha256").hexdigest()
         if actual != expected:
-            raise SemanticUnavailable(f"semantic model artifact failed verification: {relative}")
+            raise SemanticUnavailable(f"semantic model file failed verification: {relative}")
     return directory
 
 
@@ -156,15 +156,22 @@ def provision_model() -> Path:
     except SemanticUnavailable:
         raise
     except Exception as error:
-        raise SemanticUnavailable("could not provision semantic model") from error
+        raise SemanticUnavailable("could not install semantic model") from error
     finally:
         if staged.exists():
             shutil.rmtree(staged)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("provision", "verify"))
+    parser = argparse.ArgumentParser(
+        prog="python3 -m capalith.semantic",
+        description="Manage the local semantic-search model.",
+    )
+    parser.add_argument(
+        "command",
+        choices=("provision", "verify"),
+        help="download and verify the model, or verify existing files",
+    )
     arguments = parser.parse_args(argv)
     try:
         path = provision_model() if arguments.command == "provision" else _verify_model_directory(model_directory())

@@ -395,13 +395,13 @@ def _validate_observations(
         expected_id = artifact_id(source_id, observation.bundle_path)
         if observation.artifact_id != expected_id:
             raise StoreError(
-                "artifact identity does not match source and path: "
+                "artifact_id does not match source_id and bundle_path: "
                 f"{observation.artifact_id}"
             )
         if observation.artifact_id in seen_ids:
-            raise StoreError(f"duplicate artifact identity: {observation.artifact_id}")
+            raise StoreError(f"duplicate artifact_id: {observation.artifact_id}")
         if observation.bundle_path in seen_paths:
-            raise StoreError(f"duplicate artifact path: {observation.bundle_path}")
+            raise StoreError(f"duplicate bundle_path: {observation.bundle_path}")
         seen_ids.add(observation.artifact_id)
         seen_paths.add(observation.bundle_path)
 
@@ -1033,7 +1033,8 @@ class Store:
                             or identity_row["bundle_path"] != observation.bundle_path
                         ):
                             raise StoreError(
-                                f"artifact identity collision: {observation.artifact_id}"
+                                "artifact_id is already used by another source or bundle_path: "
+                                f"{observation.artifact_id}"
                             )
                         existing_ids.add(observation.artifact_id)
 
@@ -1110,7 +1111,7 @@ class Store:
                             or catalog.description is None
                             or catalog.skill_text is None
                         ):
-                            raise StoreError("semantic vector has no ready catalog entry")
+                            raise StoreError("semantic index has no searchable skill")
                         projection = semantic.projection(
                             catalog.name, catalog.description, catalog.skill_text
                         )
@@ -1256,7 +1257,7 @@ class Store:
                     "status": "missing",
                     "name": None,
                     "description": None,
-                    "reason": "catalog state is unavailable for the current artifact version",
+                    "reason": "this artifact version is not in the current search index",
                 }
                 result["resources"] = []
                 result["relationships"] = []
@@ -1358,10 +1359,10 @@ class Store:
             or any(type(source_id) is not str or not source_id for source_id in source_ids)
         ):
             raise StoreError(
-                "invalid_request: source scope must be an ordered tuple of source ids"
+                "invalid_request: source_ids must be an ordered tuple of non-empty strings"
             )
         if source_ids is not None and len(set(source_ids)) != len(source_ids):
-            raise StoreError("invalid_request: source scope contains a duplicate source id")
+            raise StoreError("invalid_request: source_ids must not contain duplicates")
         if relationship_types is not None and (
             type(relationship_types) is not tuple
             or any(
@@ -1415,7 +1416,9 @@ class Store:
             if artifact["status"] != "enabled" or artifact["source_id"] not in scope:
                 if view_id is not None:
                     raise StoreError("stale_view")
-                raise StoreError("source_unavailable: root artifact is outside the source scope")
+                raise StoreError(
+                    "source_unavailable: starting artifact's source_id is not included in source_ids"
+                )
 
             entries: list[dict[str, object]] = []
             relationships: list[dict[str, object]] = []
@@ -1715,10 +1718,10 @@ class Store:
             or any(type(source_id) is not str or not source_id for source_id in source_ids)
         ):
             raise StoreError(
-                "invalid_request: source scope must be an ordered tuple of source ids"
+                "invalid_request: source_ids must be an ordered tuple of non-empty strings"
             )
         if source_ids is not None and len(set(source_ids)) != len(source_ids):
-            raise StoreError("invalid_request: source scope contains a duplicate source id")
+            raise StoreError("invalid_request: source_ids must not contain duplicates")
         connection = self._connect()
         try:
             connection.execute("BEGIN")

@@ -30,9 +30,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Local semantic retrieval
+## Local semantic search
 
-Capalith uses `fastembed` 0.8.0 under Apache-2.0 with the `Qdrant/bge-small-en-v1.5-onnx-Q` model artifact at revision `52398278842ec682c6f32300af41344b1c0b0bb2`, also treated as Apache-2.0. The logical model is `BAAI/bge-small-en-v1.5`.
+Capalith uses `fastembed` 0.8.0 under Apache-2.0. Its ONNX model files come from `Qdrant/bge-small-en-v1.5-onnx-Q` at revision `52398278842ec682c6f32300af41344b1c0b0bb2`; Capalith treats them as Apache-2.0. The files implement `BAAI/bge-small-en-v1.5`.
 
 Sources:
 
@@ -40,7 +40,7 @@ Sources:
 - https://huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q
 - https://huggingface.co/BAAI/bge-small-en-v1.5
 
-The source repository's `requirements.txt` and `DEPENDENCIES.json` record the exact 28-wheel semantic closure and selected artifact hashes. Installed wheels retain their bundled license and notice files. The resolved license inventory is:
+`requirements.txt` and `DEPENDENCIES.json` list the 28 pinned wheels used for semantic search and their hashes. Installed wheels keep their bundled license and notice files. Their licenses are:
 
 - Apache-2.0: fastembed 0.8.0, flatbuffers 25.12.19, hf-xet 1.6.0, huggingface-hub 1.29.0, requests 2.34.2, tokenizers 0.23.1.
 - MIT: anyio 4.14.2, charset-normalizer 3.5.1, filelock 3.32.5, h11 0.16.0, loguru 0.7.3, mmh3 5.3.0, onnxruntime 1.29.0, py-rust-stemmers 0.1.8, PyYAML 6.0.3, urllib3 2.7.0.
@@ -61,7 +61,7 @@ Sources:
 - https://github.com/modelcontextprotocol/python-sdk
 - https://pypi.org/project/mcp/2.1.1/
 
-The source repository's `requirements.txt` and `DEPENDENCIES.json` record the exact 28-wheel MCP closure and selected artifact hashes. Five wheels are shared with the semantic retrieval closure: `anyio`, `click`, `h11`, `idna`, and `typing-extensions`. The 23 additional distributions retain their bundled license and notice files:
+`requirements.txt` and `DEPENDENCIES.json` list the 28 pinned wheels used by the MCP server and their hashes. Five are also used for semantic search: `anyio`, `click`, `h11`, `idna`, and `typing-extensions`. The other 23 distributions keep their bundled license and notice files:
 
 - Apache-2.0: opentelemetry-api 1.44.0, python-multipart 0.0.32.
 - Apache-2.0 OR BSD-3-Clause: cryptography 50.0.1.

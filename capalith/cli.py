@@ -14,6 +14,12 @@ from capalith.intake import review_git_source, scan_git_source, scan_local_sourc
 from capalith.store import Source, Store, StoreError
 
 
+_SOURCE_USAGE = (
+    "source requires one of: list; review SOURCE_ID; add-local ROOT; "
+    "add-git URL REF; set-path SOURCE_ID ROOT; enable, disable, or remove SOURCE_ID"
+)
+
+
 def _source_value(source: Source) -> dict[str, object]:
     value = asdict(source)
     result = {
@@ -137,27 +143,59 @@ def main(
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
 ) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--db", required=True)
-    parser.add_argument("--source-id", action="append", dest="source_ids")
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--view-id")
+    parser = argparse.ArgumentParser(
+        prog="capalith",
+        description="Catalog and search portable Agent Skills.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""command forms:
+  source list
+  source review SOURCE_ID
+  source add-local ROOT
+  source add-git URL REF
+  source set-path SOURCE_ID ROOT
+  source enable|disable|remove SOURCE_ID
+  scan SOURCE_ID
+  artifact list
+  artifact show ARTIFACT_ID CONTENT_DIGEST [RESOURCE_PATH]
+  discover QUERY...
+  traverse ARTIFACT_ID CONTENT_DIGEST
+  config show
+
+REF must be refs/heads/NAME or refs/tags/NAME.""",
+    )
+    parser.add_argument("--db", required=True, metavar="PATH", help="catalog database path")
+    parser.add_argument(
+        "--source-id",
+        action="append",
+        dest="source_ids",
+        metavar="SOURCE_ID",
+        help="source to search, in priority order; repeat to add sources",
+    )
+    parser.add_argument("--limit", type=int, metavar="COUNT", help="maximum results per page")
+    parser.add_argument(
+        "--offset", type=int, default=0, metavar="COUNT", help="number of results to skip"
+    )
+    parser.add_argument("--view-id", metavar="VIEW_ID", help="view ID returned by an earlier page")
     parser.add_argument(
         "--relationship-type",
         action="append",
         dest="relationship_types",
         choices=("requires", "complements", "alternatives", "conflicts", "supersedes"),
+        help="relationship to follow; repeat to add types",
     )
     parser.add_argument(
-        "--direction", choices=("outbound", "inbound", "both"), default="outbound"
+        "--direction",
+        choices=("outbound", "inbound", "both"),
+        default="outbound",
+        help="relationship direction",
     )
-    parser.add_argument("--depth", type=int, default=1)
+    parser.add_argument("--depth", type=int, default=1, help="relationship depth from 1 to 3")
     parser.add_argument(
         "command",
         choices=("source", "scan", "artifact", "discover", "traverse", "config"),
+        help="command to run",
     )
-    parser.add_argument("arguments", nargs="*")
+    parser.add_argument("arguments", nargs="*", help="arguments for the command")
     arguments = parser.parse_args(argv)
 
     try:
@@ -184,11 +222,7 @@ def main(
                 }[action]
                 value = _set_source_status(database, locator, status)
             else:
-                parser.error(
-                    "source requires 'list', 'review SOURCE_ID', 'add-local ROOT', "
-                    "'add-git URL REF', 'set-path SOURCE_ID ROOT', or "
-                    "'enable|disable|remove SOURCE_ID'"
-                )
+                parser.error(_SOURCE_USAGE)
         elif arguments.command == "source" and len(command_arguments) == 3:
             action, first, second = command_arguments
             if action == "add-git":
@@ -196,11 +230,7 @@ def main(
             elif action == "set-path":
                 value = _set_path(database, first, second)
             else:
-                parser.error(
-                    "source requires 'list', 'review SOURCE_ID', 'add-local ROOT', "
-                    "'add-git URL REF', 'set-path SOURCE_ID ROOT', or "
-                    "'enable|disable|remove SOURCE_ID'"
-                )
+                parser.error(_SOURCE_USAGE)
         elif arguments.command == "scan" and len(command_arguments) == 1:
             value = _scan(database, command_arguments[0])
         elif arguments.command == "artifact" and command_arguments == ["list"]:
@@ -250,7 +280,7 @@ def main(
                 command_arguments[3] if len(command_arguments) == 4 else None,
             )
         else:
-            parser.error("invalid command arguments")
+            parser.error("invalid command arguments; use --help for command forms")
     except sqlite3.Error:
         print("database operation failed", file=stderr)
         return 1
