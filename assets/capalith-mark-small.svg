@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision">
+  <title id="title">Capalith small-size mark</title>
+  <desc id="desc">Pixel-fitted Capalith butterfly-joint mark for display at 16 to 32 pixels.</desc>
+  <path fill="#1A1614" d="M7 6h8v6h-1l-2-2H9v12h3l2-2h1v6H7l-6-7v-6Z"/>
+  <path fill="#1A1614" d="M17 6h8l6 7v6l-6 7h-8v-6h1l2 2h3V10h-3l-2 2h-1Z"/>
+  <path fill="#FF6E14" d="M10 12h2l2 2h4l2-2h2v8h-2l-2-2h-4l-2 2h-2Z"/>
+</svg>

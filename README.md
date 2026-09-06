@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/capalith-mark.svg" alt="Capalith logo" width="240">
+</p>
+
 # Capalith
 
 Capalith is a local-first catalog for portable agent skills. It indexes each skill with its supporting files from local directories or Git branches and tags. Search returns ranked matches, declared relationships, and the IDs a host needs to read a selected skill.

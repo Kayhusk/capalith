@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Capalith reversed mark</title>
+  <desc id="desc">Two intact faceted plates joined by one fitted butterfly key, reversed for dark surfaces.</desc>
+  <g fill="#F7F5EF">
+    <path d="M56 48h64v50h-8l-12-12H72v84h28l12-12h8v50H56L8 152v-48Z"/>
+    <path d="M136 48h64l48 56v48l-48 56h-64v-50h8l12 12h28V86h-28l-12 12h-8Z"/>
+    <path d="M80 96h20l16 16h24l16-16h20v64h-20l-16-16h-24l-16 16H80Z"/>
+  </g>
+</svg>
