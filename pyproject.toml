@@ -24,10 +24,6 @@ dependencies = [
     "mcp==2.1.1",
     "mcp-types==2.1.1",
     "pydantic==2.13.5",
-]
-
-[project.optional-dependencies]
-semantic = [
     "fastembed==0.8.0",
     "huggingface-hub==1.29.0",
 ]
@@ -35,6 +31,7 @@ semantic = [
 [project.scripts]
 capalith = "capalith.cli:main"
 capalith-mcp = "capalith.mcp_server:main"
+capalith-model = "capalith.semantic:main"
 
 [tool.setuptools]
 packages = ["capalith"]

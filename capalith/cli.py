@@ -69,13 +69,13 @@ def _list_sources(database: Path) -> list[dict[str, object]]:
     return [_source_value(source) for source in _existing_store(database).list_sources()]
 
 
-def _configuration_report(database: Path) -> dict[str, object]:
+def _configuration_report(database: Path | None) -> dict[str, object]:
     sources = (
         [
             _source_value(source)
             for source in Store(database, read_only=True).list_sources()
         ]
-        if database.is_file()
+        if database is not None and database.is_file()
         else []
     )
     return {

@@ -411,10 +411,15 @@ class Store:
         self.path = Path(os.path.abspath(path))
         self.read_only = read_only
 
-    def _open_parent(self) -> int:
+    def _open_parent(self, *, create: bool = False) -> int:
         descriptor = os.open("/", _DIRECTORY_OPEN_FLAGS)
         try:
             for part in self.path.parent.parts[1:]:
+                if create:
+                    try:
+                        os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                    except FileExistsError:
+                        pass
                 child = os.open(
                     part,
                     _DIRECTORY_OPEN_FLAGS,

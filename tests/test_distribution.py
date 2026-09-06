@@ -32,17 +32,17 @@ class DistributionTests(unittest.TestCase):
                 "mcp==2.1.1",
                 "mcp-types==2.1.1",
                 "pydantic==2.13.5",
+                "fastembed==0.8.0",
+                "huggingface-hub==1.29.0",
             },
             set(project["dependencies"]),
         )
-        self.assertEqual(
-            {"fastembed==0.8.0", "huggingface-hub==1.29.0"},
-            set(project["optional-dependencies"]["semantic"]),
-        )
+        self.assertNotIn("optional-dependencies", project)
         self.assertEqual(
             {
                 "capalith": "capalith.cli:main",
                 "capalith-mcp": "capalith.mcp_server:main",
+                "capalith-model": "capalith.semantic:main",
             },
             project["scripts"],
         )

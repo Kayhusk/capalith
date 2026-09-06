@@ -2,6 +2,16 @@
 
 The connected Capalith server's schemas define the accepted arguments. This reference describes the fields in this release. If the live schema differs, follow it and report the difference only when it blocks the task.
 
+## `index_skills`
+
+Available in the default connection, without `--db`, `--source`, or `--git`. No input is required. It discovers supported local host sources, registers them, and scans through the same intake used by the CLI. It never writes sources or host settings.
+
+- `workspace`: optional absolute task directory. Project lookup checks supported host skill locations from there through the nearest Git root. Without a Git root, only the supplied directory is checked. Before an explicit selection, discovery uses `CLAUDE_PROJECT_DIR` when supplied by the host, then the server's working directory. The server reports the locations it finds.
+- `host_homes`: optional object with known absolute `hermes`, `claude`, or `codex` config homes. These override the corresponding server environment values, without changing the environment or host configuration. A supplied object replaces previous overrides; omitted keys fall back to the environment and conventional defaults. An empty object clears the overrides.
+- `source_paths`: optional non-empty list of absolute skill directories. This replaces automatic source selection. Use only task-authorized roots.
+
+The result includes the catalog path, readiness, present artifact count, source registrations, discovered locations, and warnings. Automatic discovery reports its workspace and host homes. A no-argument repeat retains that context and refreshes the selection without a server restart. Supplying a workspace or host homes returns to automatic selection unless `source_paths` is also supplied. Invalid arguments leave the current selection intact. Failed indexing clears this connection's readiness rather than serving stale results. Source scans commit independently, not as a whole-catalog snapshot.
+
 ## `discover`
 
 Use `discover` to find skills for a natural-language task.
@@ -70,7 +80,7 @@ Keep any missing or ambiguous relationship information. Do not infer an artifact
 
 ## `config_show`
 
-`config_show` takes no input. Use it when the task needs source IDs, source status, or available Capalith features. It reports Capalith state, not host configuration or permission to change a source.
+`config_show` takes no input and never initializes or refreshes a catalog. In agent-managed mode it reports readiness and probes supported source locations. Use it before first-use indexing or when source IDs, source status, or available features affect the task. It reports available files, not host activation, usage, or permission to change a source.
 
 ## Pass a result to the host
 
@@ -79,6 +89,7 @@ Do this only when the host exposes a skill reader or loader and the task require
 - Use only `ready` recommendations, and review `recommendation.uncertainty` before choosing one.
 - Keep each recommended skill's `name`, `source_id`, `artifact_id`, `content_digest`, and `skill_path` together.
 - Follow the host tool's current schema. Pass a returned name or relative path only when that schema accepts it.
+- Preserve the host's enablement, precedence, quarantine, and project-trust decisions. Stored content is not a fallback for a host refusal or a disabled skill.
 - If the host cannot use the returned name or path without guessing, stop. Do not substitute a machine path or an unrelated skill with the same name.
 
 Capalith returns IDs and stored data. The agent decides whether to use Capalith and which tools to call. The host decides whether selected content can be read, loaded, or run.
@@ -90,6 +101,9 @@ Capalith returns IDs and stored data. The agent decides whether to use Capalith 
 - `stale_artifact`: the `artifact_id` and `content_digest` are no longer current. Use `discover` if the task needs the current version.
 - `artifact_not_found`: no current artifact matches the ID. Use `discover` with the same selected sources if the task needs a replacement. Do not invent an ID.
 - `resource_not_found`: inspect the artifact summary and choose a returned path, or stop.
-- `source_unavailable`: report the unavailable source. Do not enable or scan a source from this skill.
+- `index_required`: use `index_skills` if exposed, then retry the query.
+- `no_skill_sources`: no supported source directory was found. Use a task-supplied workspace or explicit skill directory if available; otherwise report the missing source. Do not crawl the disk.
+- `catalog_setup_failed`: read `config_show` warnings and check the selected roots and writable data location. Correct the cause before retrying; do not silently expand the selection.
+- `source_unavailable`: report the unavailable source. Do not enable it. In agent-managed mode, refresh only if the existing selection is still authorized and the source is accessible again.
 - `database_unavailable`: report that the configured catalog cannot be read. Do not create or migrate it.
 - `internal_error`: report `internal_error`. Do not expose or infer database details.
