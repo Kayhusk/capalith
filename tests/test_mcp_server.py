@@ -135,6 +135,49 @@ class MCPServerTests(unittest.TestCase):
             self.assertEqual(source_before, hash_bundle(bundle))
             self.assertEqual(database_before, database.read_bytes())
 
+    def test_resource_inspection_omits_audit_payload_and_keeps_stored_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            bundle = make_skill(temp / "source", "compact-read")
+            database = temp / "catalog.sqlite3"
+            store = Store(database)
+            store.initialize()
+            source = store.add_local_source(bundle.parent)
+            scan_local_source(store, source.id)
+            skill = bundle / "SKILL.md"
+            skill.write_text(skill.read_text() + "Stored revision.\n", encoding="utf-8")
+            scan_local_source(store, source.id)
+            expected_text = skill.read_text()
+            digest = hash_bundle(bundle).digest
+            arguments = {"artifact_id": artifact_id(source.id, bundle.name), "content_digest": digest}
+            skill.write_text("Unscanned change.\n", encoding="utf-8")
+            database_before = database.read_bytes()
+
+            async def exercise() -> None:
+                async with stdio_client(parameters(database)) as streams:
+                    async with ClientSession(*streams) as session:
+                        await session.initialize()
+                        summary = await session.call_tool("inspect", arguments)
+                        selected = await session.call_tool(
+                            "inspect", {**arguments, "resource_path": "SKILL.md"}
+                        )
+                        self.assertFalse(summary.is_error or selected.is_error)
+                        audit, resource = summary.structured_content, selected.structured_content
+                        assert audit is not None and resource is not None
+                        self.assertEqual(2, len(audit["versions"]))
+                        for field in ("manifest", "versions", "resources", "relationships"):
+                            self.assertIn(field, audit)
+                            self.assertNotIn(field, resource)
+                        for field in ("artifact_id", "source_id", "bundle_path", "current_digest", "present", "catalog"):
+                            self.assertEqual(audit[field], resource[field])
+                        self.assertEqual(expected_text, resource["resource"]["text"])
+                        self.assertEqual("SKILL.md", resource["resource"]["path"])
+                        self.assertEqual("text", resource["resource"]["status"])
+
+            anyio.run(exercise)
+            self.assertEqual(database_before, database.read_bytes())
+            self.assertEqual("Unscanned change.\n", skill.read_text())
+
     def test_stdio_server_maps_protocol_and_application_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)

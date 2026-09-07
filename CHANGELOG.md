@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2, 2026-09-06
+
+### Focused skill reading
+
+- Clarify when to reuse loaded instructions, use a permitted native reader, or retrieve a stored revision. Full inspection and duplicate content loading are no longer prescribed for ordinary skill use. Addresses [#1](https://github.com/Kayhusk/capalith/issues/1).
+- Resource-specific inspection now returns artifact/source identity, presence and size fields, catalog status, and the selected resource. It no longer builds or returns manifests, version history, the full resource list, or relationships. Omit `resource_path` in MCP or the optional resource argument in the CLI to retain full audit inspection. Addresses [#2](https://github.com/Kayhusk/capalith/issues/2).
+
+The resource-specific response shape changes in this release. Consumers needing audit fields must use full inspection. Tool names, arguments, validation, stored content, and catalog format remain unchanged. No ranking, semantic-model, background-refresh, activation, or host-configuration changes are included.
+
 ## 0.1.1, 2026-09-06
 
 ### Full installation

@@ -90,7 +90,7 @@ _INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             },
             "resource_path": {
                 "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}],
-                "description": "Stored relative path to read; omit it to list resources.",
+                "description": "Read only this stored resource with identity and catalog status; omit for full audit metadata and resource list.",
             },
         },
         "required": ["artifact_id", "content_digest"],
