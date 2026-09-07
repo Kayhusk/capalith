@@ -124,6 +124,8 @@ class CliTests(unittest.TestCase):
                 "references/guide.md",
             )
             self.assertEqual("Stored guide.\n", resource["resource"]["text"])
+            self.assertNotIn("versions", resource)
+            self.assertNotIn("manifest", resource)
 
             moved = temp / "moved"
             root.rename(moved)

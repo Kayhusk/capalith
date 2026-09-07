@@ -19,7 +19,7 @@ Capalith provides:
 
 Connect Capalith, then ask your agent to use it for a task. The server starts without a catalog or source arguments. Its bundled guidance and tool descriptions tell the agent how to check readiness, locate supported skill sources, index them, and retrieve relevant skill content. No database paths, source IDs, separate scan commands, or companion-guide installation are required.
 
-The current package supports Linux with Python 3.11 or later and SQLite FTS5. Git is needed only for Git sources. Releases are distributed through GitHub, not a package registry. See the [changelog](CHANGELOG.md) and [release assets](https://github.com/Kayhusk/capalith/releases/tag/v0.1.1).
+The current package supports Linux with Python 3.11 or later and SQLite FTS5. Git is needed only for Git sources. Releases are distributed through GitHub, not a package registry. See the [changelog](CHANGELOG.md) and [release assets](https://github.com/Kayhusk/capalith/releases/tag/v0.1.2).
 
 ### Full installation
 
@@ -27,7 +27,7 @@ With [uv](https://docs.astral.sh/uv/guides/tools/) installed:
 
 ```bash
 uv tool install --python 3.11 \
-  https://github.com/Kayhusk/capalith/releases/download/v0.1.1/capalith-0.1.1-py3-none-any.whl
+  https://github.com/Kayhusk/capalith/releases/download/v0.1.2/capalith-0.1.2-py3-none-any.whl
 capalith-model provision
 capalith-model verify
 ```
@@ -165,7 +165,9 @@ python3 -m capalith --db "$DB" --source-id "$SOURCE_ID" \
   traverse "$ARTIFACT_ID" "$CONTENT_DIGEST"
 ```
 
-Inspection reads the copy stored in SQLite. It does not reopen the source directory. Traversal follows only declared `requires`, `complements`, `alternatives`, `conflicts`, and `supersedes` relationships. It is deterministic, cycle-safe, and limited to depths 1 through 3.
+Inspection reads the copy stored in SQLite. It does not reopen the source directory. A resource-specific read returns identity, catalog status, and that resource without manifests, version history, other resources, or relationships. Omit the resource path for full audit inspection. Prefer the host's native reader for ordinary skill use, and reuse instructions already loaded instead of fetching a second copy.
+
+Traversal follows only declared `requires`, `complements`, `alternatives`, `conflicts`, and `supersedes` relationships. It is deterministic, cycle-safe, and limited to depths 1 through 3.
 
 ## Add a Git branch or tag source
 

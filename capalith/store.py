@@ -1215,6 +1215,34 @@ class Store:
                 raise StoreError("stale_artifact")
 
             result = _artifact_fields(row)
+            catalog = connection.execute(
+                "SELECT status,name,description,reason FROM catalog_entries "
+                "WHERE artifact_id=? AND content_digest=? AND catalog_format_version=?",
+                (artifact_id, row["current_digest"], CATALOG_FORMAT_VERSION),
+            ).fetchone()
+            result["catalog"] = {
+                "catalog_format_version": CATALOG_FORMAT_VERSION,
+                "status": catalog["status"] if catalog is not None else "missing",
+                "name": catalog["name"] if catalog is not None else None,
+                "description": catalog["description"] if catalog is not None else None,
+                "reason": catalog["reason"] if catalog is not None else
+                    "this artifact version is not in the current search index",
+            }
+            if resource_path is not None:
+                if catalog is None:
+                    raise StoreError("resource_not_found")
+                resource = connection.execute(
+                    "SELECT path,status,reason,text FROM catalog_resources "
+                    "WHERE artifact_id=? AND content_digest=? "
+                    "AND catalog_format_version=? AND path=?",
+                    (artifact_id, row["current_digest"], CATALOG_FORMAT_VERSION, resource_path),
+                ).fetchone()
+                if resource is None:
+                    raise StoreError("resource_not_found")
+                result["resource"] = dict(resource)
+                connection.execute("COMMIT")
+                return result
+
             result["manifest"] = json.loads(row["manifest_json"])
             versions = connection.execute(
                 "SELECT digest,first_seen_at,file_count,byte_count,manifest_json "
@@ -1251,31 +1279,10 @@ class Store:
                         for revision in revisions
                     ]
                 result["versions"].append(value)
-            catalog = connection.execute(
-                "SELECT status,name,description,reason FROM catalog_entries "
-                "WHERE artifact_id=? AND content_digest=? AND catalog_format_version=?",
-                (artifact_id, row["current_digest"], CATALOG_FORMAT_VERSION),
-            ).fetchone()
             if catalog is None:
-                result["catalog"] = {
-                    "catalog_format_version": CATALOG_FORMAT_VERSION,
-                    "status": "missing",
-                    "name": None,
-                    "description": None,
-                    "reason": "this artifact version is not in the current search index",
-                }
                 result["resources"] = []
                 result["relationships"] = []
-                if resource_path is not None:
-                    raise StoreError("resource_not_found")
             else:
-                result["catalog"] = {
-                    "catalog_format_version": CATALOG_FORMAT_VERSION,
-                    "status": catalog["status"],
-                    "name": catalog["name"],
-                    "description": catalog["description"],
-                    "reason": catalog["reason"],
-                }
                 result["resources"] = [
                     {
                         "path": resource["path"],
@@ -1308,21 +1315,6 @@ class Store:
                         (artifact_id, row["current_digest"], CATALOG_FORMAT_VERSION),
                     )
                 ]
-                if resource_path is not None:
-                    resource = connection.execute(
-                        "SELECT path,status,reason,text FROM catalog_resources "
-                        "WHERE artifact_id=? AND content_digest=? "
-                        "AND catalog_format_version=? AND path=?",
-                        (
-                            artifact_id,
-                            row["current_digest"],
-                            CATALOG_FORMAT_VERSION,
-                            resource_path,
-                        ),
-                    ).fetchone()
-                    if resource is None:
-                        raise StoreError("resource_not_found")
-                    result["resource"] = dict(resource)
             connection.execute("COMMIT")
             return result
         except BaseException:

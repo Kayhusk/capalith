@@ -54,6 +54,8 @@ Optional input:
 
 - `resource_path`: use an exact canonical relative POSIX path from Capalith output or explicit task input. Omit it to inspect the artifact summary and resource list.
 
+With `resource_path`, the response contains artifact/source identity, `current_digest`, presence and size fields, current catalog status, and the selected `resource` with its path, status, reason, and text. It omits manifests, version history, other resources, and relationships. Omit the path when that full audit information is needed.
+
 Do not shorten or rebuild these values. Do not guess a resource path. Inspection reads the stored copy; it does not reopen the source directory.
 
 ## `traverse`
@@ -86,6 +88,7 @@ Keep any missing or ambiguous relationship information. Do not infer an artifact
 
 Do this only when the host exposes a skill reader or loader and the task requires selected content.
 
+- Reuse already-loaded instructions. Otherwise use the permitted native reader without also fetching the stored copy, unless a source comparison or stored revision is required.
 - Use only `ready` recommendations, and review `recommendation.uncertainty` before choosing one.
 - Keep each recommended skill's `name`, `source_id`, `artifact_id`, `content_digest`, and `skill_path` together.
 - Follow the host tool's current schema. Pass a returned name or relative path only when that schema accepts it.
