@@ -16,6 +16,7 @@ from capalith.store import Store, StoreError
 
 def discover_sources(
     workspace: Path | None = None, host_homes: dict[str, Path] | None = None,
+    extra_paths: Sequence[Path] = (),
 ) -> dict[str, object]:
     """Probe host skill locations, not the disk or other Hermes profiles."""
     home = Path.home()
@@ -74,6 +75,7 @@ def discover_sources(
         pass
     except (OSError, ValueError, AttributeError, yaml.YAMLError):
         warnings.append("hermes_config_unavailable")
+    candidates.extend((path, "extra") for path in extra_paths)
     sources: dict[Path, dict[str, object]] = {}
     for supplied, origin in candidates:
         try:
@@ -105,6 +107,8 @@ def discover_sources(
                 if origin not in origins:
                     origins.append(origin)
         except FileNotFoundError:
+            if origin == "extra":
+                warnings.append("source_unavailable:extra")
             continue
         except (OSError, ValueError, RuntimeError):
             warnings.append(f"source_unavailable:{origin}")

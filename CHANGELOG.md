@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3, 2026-09-10
+
+### First-search setup and additional folders
+
+- Prepare the default MCP catalog on the first `discover` call, with task and profile context accepted on search. Repeated searches read the stored snapshot; explicit refresh remains available.
+- Add `--extra-source` connection arguments and `extra_source_paths` tool input for folders alongside discovered native locations. Preserve explicit-only and read-only modes.
+- Remove fallback-only usage guidance. Capalith provides catalog navigation without prescribing a search-first workflow or adding a host plugin.
+- Validate conflicting source inputs in the tool handler so hosts that rewrite JSON Schema `not` clauses retain the same input checks.
+
+Default-mode `discover` now advertises catalog writes. Sources and host configuration remain unchanged, and no skill is automatically loaded or activated.
+
 ## 0.1.2, 2026-09-06
 
 ### Focused skill reading
