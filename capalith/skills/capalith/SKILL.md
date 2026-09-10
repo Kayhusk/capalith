@@ -5,18 +5,18 @@ license: MIT
 compatibility: "Requires a configured Capalith MCP server."
 metadata:
   author: "Edward Bowie"
-  version: "0.1.2"
+  version: "0.1.3"
 ---
 
 # Capalith
 
 Capalith searches indexed Agent Skills, reads their stored files, and follows declared relationships.
 
-## When to use
+## Scope
 
-Use Capalith when the user asks for it, or when a task needs specialist skill guidance you have not loaded. It can locate installed skill sources, index them, find relevant skills, inspect their files, and follow declared relationships.
+Capalith provides catalog navigation across supported host skill directories and user-added folders. Search, stored resources, and declared relationships remain available whether or not a relevant skill is already known or loaded.
 
-Unless the user requests Capalith, skip it when the host already has the right skill and the task does not need a catalog search, stored resources, or relationship data.
+The agent decides when to search and which results are useful. Capalith does not impose a search-first workflow or replace native skill loading.
 
 Do not use it to install or activate skills, execute bundled code, repair content, or change host configuration. Indexing changes only Capalith's catalog.
 
@@ -28,15 +28,17 @@ Do not use it to install or activate skills, execute bundled code, repair conten
 
 ## First use and refresh
 
-Check readiness and the reported context with `config_show`. On first use, call `index_skills` with the task's absolute `workspace` from the host session. Supply it again before searching after a project change, even when the catalog is ready. The server's working directory may be its installation directory, not the task workspace. Do not ask the user for a database, source IDs, or a scan command.
+In the default connection, the first `discover` call prepares the local catalog and returns matches. No readiness or indexing call is required first. `config_show` is an optional read-only preview. Search can accept the task's absolute `workspace` and known `host_homes` directly when they differ from the server context. The server's working directory may be its installation directory, not the task workspace.
 
 Compare `source_discovery.host_homes` with known host context. If the MCP environment lost a custom home, supply `host_homes` with the known absolute `hermes`, `claude`, or `codex` config home. In Hermes, use the active `HERMES_HOME` or the native config path for the selected profile. Do not infer a profile from the executable location or inspect other profiles. If host metadata provides exact permitted skill roots, use those as `source_paths`; also use explicit roots when the user or task selected them. Never guess filesystem locations or ask the user to register sources that the host already identifies.
 
-No-argument calls refresh the current selection and retain its workspace and host homes. Automatic selections are rediscovered; explicit paths remain selected until a workspace or host homes are supplied. Use the default server workspace only when no task workspace is known, and report that limitation.
+`extra_source_paths` adds user-selected folders alongside native locations. A supplied list replaces previous additions; an empty list clears them. Omission retains them for the connection. `source_paths` instead selects only explicit roots and cannot be combined with `extra_source_paths`. The connection option `--extra-source` retains user additions across reconnects without a separate Capalith settings file.
 
-Read the returned source list and warnings. A directory match means a source is available, not that a host loaded or used its skills. Discovery is bounded to supported host locations and the current Hermes profile, not all profiles or the whole disk. If the catalog is ready, search it. Reindex when sources change or a fresh observation is needed, not before every query.
+Searches with unchanged context read the existing snapshot, including pagination. A context change prepares the selected catalog. `index_skills` explicitly refreshes the current selection without a restart. It retains workspace, host homes, and additions when omitted. Supplying workspace, host homes, or additions returns to automatic discovery unless explicit roots are also selected. After failed setup, correct the cause and use `index_skills`, or supply corrected context. Unchanged searches do not retry failed setup.
 
-Servers connected with `--db` or startup source options expose only read-only tools. Do not attempt indexing through those modes. Follow their connection's refresh policy.
+A directory match does not prove host activation, trust, or use. Discovery is bounded to supported host locations, the current Hermes profile, and user-added folders. It does not search other profiles or the whole disk. Use the default server workspace only when no task workspace is known, and report that limitation.
+
+Servers connected with `--db`, `--source`, or `--git` expose only read-only tools and reject search context arguments. They cannot use `--extra-source`. Follow their connection's refresh policy.
 
 ## Choose a tool
 
@@ -46,7 +48,7 @@ Call only the tools the task needs.
 - Use `inspect` when the task provides an exact `artifact_id` and `content_digest` and needs stored metadata, a resource list, or one resource.
 - Use `traverse` when the task provides an exact `artifact_id` and `content_digest` and declared requirements, complements, alternatives, conflicts, or supersession affect the choice.
 - Use `config_show` when configured source IDs, source states, or Capalith capabilities affect the decision.
-- Use `index_skills` for first-use setup or refresh when the server exposes it.
+- Use `index_skills` for an explicit refresh or source selection when the server exposes it.
 
 ## Use results safely
 

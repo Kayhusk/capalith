@@ -13,13 +13,13 @@ Capalith provides:
 - stable pagination, inspection of stored files, and relationship traversal that handles cycles and enforces depth and result limits;
 - sources that can be enabled, disabled, or removed without deleting history;
 - read-only checks for changes to Git branch or tag sources;
-- an MCP server over stdio with agent-led indexing and read-only retrieval.
+- an MCP server over stdio with first-search catalog setup and stored-snapshot retrieval.
 
 ## Connect and use
 
-Connect Capalith, then ask your agent to use it for a task. The server starts without a catalog or source arguments. Its bundled guidance and tool descriptions tell the agent how to check readiness, locate supported skill sources, index them, and retrieve relevant skill content. No database paths, source IDs, separate scan commands, or companion-guide installation are required.
+Connect Capalith, then ask your agent to find a skill for a task. The server starts without a catalog or source arguments. The first search discovers supported skill directories, prepares the local catalog, and returns matches. No readiness call, database path, source IDs, separate scan command, or companion-guide installation is required. Capalith provides navigation; the agent decides when to use it and the host retains control of skill loading.
 
-The current package supports Linux with Python 3.11 or later and SQLite FTS5. Git is needed only for Git sources. Releases are distributed through GitHub, not a package registry. See the [changelog](CHANGELOG.md) and [release assets](https://github.com/Kayhusk/capalith/releases/tag/v0.1.2).
+The current package supports Linux with Python 3.11 or later and SQLite FTS5. Git is needed only for Git sources. Releases are distributed through GitHub, not a package registry. See the [changelog](CHANGELOG.md) and [release assets](https://github.com/Kayhusk/capalith/releases/tag/v0.1.3).
 
 ### Full installation
 
@@ -27,7 +27,7 @@ With [uv](https://docs.astral.sh/uv/guides/tools/) installed:
 
 ```bash
 uv tool install --python 3.11 \
-  https://github.com/Kayhusk/capalith/releases/download/v0.1.2/capalith-0.1.2-py3-none-any.whl
+  https://github.com/Kayhusk/capalith/releases/download/v0.1.3/capalith-0.1.3-py3-none-any.whl
 capalith-model provision
 capalith-model verify
 ```
@@ -67,9 +67,9 @@ For profile-local model and catalog storage, set `CAPALITH_SEMANTIC_MODEL` durin
 
 ### Automatic discovery and refresh
 
-`config_show` previews readiness, source locations, and discovery context without creating a catalog. On first use and after a project change, the agent passes its actual absolute `workspace` to `index_skills`. Without an explicit workspace, Capalith uses [Claude Code's `CLAUDE_PROJECT_DIR`](https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server) when supplied, then the server's working directory. Its installation directory, host profile, task workspace, and catalog can all live separately.
+`discover` accepts a query directly and prepares the catalog on first use. It also accepts the actual absolute task `workspace`, including project switches. Without an explicit workspace, Capalith uses [Claude Code's `CLAUDE_PROJECT_DIR`](https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server) when supplied, then the server's working directory. Its installation directory, host profile, task workspace, and catalog can all live separately. `config_show` optionally previews readiness, source locations, and discovery context without creating a catalog.
 
-When a client omits a custom host home from the MCP environment, the agent can supply the known `hermes`, `claude`, or `codex` config home through `host_homes`. This overrides discovery context, not host configuration. `source_paths` accepts exact task-authorized roots or roots supplied by native host metadata instead of automatic location discovery. Users do not need to register those sources manually. No-argument refreshes retain the selected workspace and host homes; switching projects does not require reconnecting.
+When a client omits a custom host home from the MCP environment, the agent can supply the known `hermes`, `claude`, or `codex` config home through `host_homes` on the search itself. This overrides discovery context, not host configuration. `source_paths` accepts exact task-authorized roots or roots supplied by native host metadata instead of automatic location discovery. Users do not need to register those sources manually. `index_skills` remains available for an explicit refresh. Omitted context retains the selected workspace and host homes; switching projects does not require reconnecting.
 
 The detector checks these locations, not the whole filesystem:
 
@@ -80,9 +80,24 @@ The detector checks these locations, not the whole filesystem:
 
 Root symlinks and linked category or skill directories, including links nested inside categories, resolve to canonical intake roots. Traversal stops at each skill bundle and skips previously visited directories to avoid cycles. Supporting-file links inside bundles remain rejected. Identical canonical source roots are deduplicated. Discovery reports warnings and origins; it does not prove a host loaded or used the skills. Other Hermes profiles, plugin registries, managed enterprise locations, dynamic host state, and arbitrary workspace descendants are not searched. This is source-location discovery, not a replacement for each host's skill inventory, enablement, precedence, quarantine, or project-trust rules. The agent must honor those decisions before using retrieved guidance.
 
-The catalog lives under `$XDG_DATA_HOME/capalith/catalogs`, or `~/.local/share/capalith/catalogs` by default. Its path depends on the selected sources and their order, so clients with the same selection and data directory reuse one catalog. Retrieval reads stored snapshots. There is no watcher or background service.
+The catalog lives under `$XDG_DATA_HOME/capalith/catalogs`, or `~/.local/share/capalith/catalogs` by default. Its path depends on the selected sources and their order, so clients with the same selection and data directory reuse one catalog. First search and changed context prepare the catalog. Searches with unchanged context, including pagination, read stored snapshots without rescanning. Use `index_skills` to observe later source changes. There is no watcher or background service. Default-mode `discover` is annotated as catalog-writing and non-destructive; the other retrieval tools remain read-only.
 
-After a failed indexing call, the connection requires successful indexing before retrieval resumes. Completed source scans remain stored; a failed source scan preserves that source's previous complete observation. Sources commit independently. Setup errors redact source and configuration details. Do not manually change registrations in an automatically managed catalog.
+After failed setup, correct the cause and use `index_skills`, or supply corrected context to `discover`. Unchanged searches do not retry setup or serve the prior catalog. Completed source scans remain stored; a failed source scan preserves that source's previous complete observation. Sources commit independently. Setup errors redact source and configuration details. Do not manually change registrations in an automatically managed catalog.
+
+### Add your own folders
+
+Keep native source discovery and add folders in the MCP connection's arguments:
+
+```json
+{
+  "command": "capalith-mcp",
+  "args": ["--extra-source", "/absolute/team-skills", "--extra-source", "/absolute/my-skills"]
+}
+```
+
+These additions survive reconnects because the client owns the connection settings. Startup stays lazy. No new Capalith config file is needed. Native roots take precedence, followed by extras in the supplied order; canonical duplicates are merged. Missing or unreadable additions fail setup instead of silently dropping the folder.
+
+For connection-local changes, `discover` and `index_skills` accept `extra_source_paths`. A supplied list replaces previous additions; `[]` clears them, and omission retains them. `source_paths` instead selects only explicit roots and cannot appear in the same call. Supplying workspace, host homes, or additions returns to automatic discovery unless explicit roots are also supplied. `--extra-source` cannot be combined with the explicit-only modes below or `--db`.
 
 ### Explicit startup sources
 
@@ -205,7 +220,7 @@ Disabled sources remain in the database and can be enabled without another scan.
 python3 -m capalith.mcp_server --db "$DB"
 ```
 
-Every mode exposes `discover`, `inspect`, `traverse`, and `config_show`. The default agent-managed connection also exposes `index_skills`. With `--db`, the server uses the exact database path supplied, does not create, migrate, or refresh the catalog, and does not read source files. `--db` cannot be combined with `--source` or `--git`. No mode opens a network listener or configures hosts.
+Every mode exposes `discover`, `inspect`, `traverse`, and `config_show`. The default agent-managed connection also exposes `index_skills`. With `--db`, the server uses the exact database path supplied, does not create, migrate, or refresh the catalog, and does not read source files. `--db` cannot be combined with `--source`, `--git`, or `--extra-source`. Explicit-only connections reject automatic-discovery context arguments on search. No mode opens a network listener or configures hosts.
 
 ## Retrieval behavior
 

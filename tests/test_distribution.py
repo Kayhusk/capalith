@@ -136,6 +136,15 @@ class DistributionTests(unittest.TestCase):
         self.assertIn("Use `config_show` when", text)
         self.assertNotIn("1. Call `discover`", combined)
         self.assertNotIn("Always start with `discover`", combined)
+        for obsolete in ("skip it when the host already has the right skill", "On first use, call `index_skills`",
+                         "before finalizing the task-specific skill set", "Do not wait for the user to name Capalith"):
+            self.assertNotIn(obsolete, combined)
+        self.assertIn("The agent decides when to search", text)
+        self.assertIn("first `discover` call prepares", text)
+        self.assertIn("extra_source_paths", combined)
+        import capalith
+        self.assertFalse(hasattr(capalith, "register"))
+        self.assertFalse((ROOT / "capalith/plugin.yaml").exists())
 
 
 if __name__ == "__main__":

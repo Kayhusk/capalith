@@ -23,6 +23,152 @@ from tests.test_intake import git, make_git_remote
 
 
 class OnboardingTests(unittest.TestCase):
+    def test_discover_prepares_current_host_catalog_without_setup_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            bundle = make_skill(profile / "skills", "native-marker")
+            before = hash_bundle(bundle)
+            workspaces = [root / name for name in ("first", "second")]
+            for workspace in workspaces:
+                make_skill(workspace / ".agents/skills", workspace.name + "-marker")
+
+            async def exercise() -> None:
+                parameters = StdioServerParameters(
+                    command=sys.executable, args=["-m", "capalith.mcp_server"],
+                    env={"PATH": os.environ["PATH"], "HOME": str(root),
+                         "HERMES_HOME": str(profile), "XDG_DATA_HOME": str(root / "data")},
+                )
+                async with stdio_client(parameters) as streams:
+                    async with ClientSession(*streams) as session:
+                        await session.initialize()
+                        tools = {t.name: t for t in (await session.list_tools()).tools}
+                        rejected = await session.call_tool("discover", {"query": "   "})
+                        self.assertTrue(rejected.is_error)
+                        self.assertFalse((root / "data").exists())
+                        for workspace in workspaces:
+                            result = await session.call_tool("discover", {
+                                "query": "marker", "workspace": str(workspace), "limit": 1,
+                            })
+                            self.assertFalse(result.is_error, result)
+                            page = result.structured_content
+                            report = await session.call_tool("config_show", {})
+                            self.assertEqual("context_change_only", report.structured_content["capabilities"]["automatic_refresh"])
+                            database = Path(report.structured_content["catalog"]["database_path"])
+                            stored = database.read_bytes()
+                            next_page = await session.call_tool("discover", {
+                                "query": "marker", "workspace": str(workspace), "limit": 1,
+                                "view_id": page["retrieval"]["view_id"],
+                                "offset": page["retrieval"]["next_offset"],
+                            })
+                            self.assertFalse(next_page.is_error, next_page)
+                            self.assertEqual({"native-marker", workspace.name + "-marker"},
+                                             {c["name"] for c in page["candidates"] + next_page.structured_content["candidates"]})
+                            for invalid in ({"workspace": "relative"}, {"host_homes": {"hermes": "relative"}}, {"limit": 0}):
+                                rejected = await session.call_tool("discover", {"query": "marker", **invalid})
+                                self.assertTrue(rejected.is_error)
+                            again = await session.call_tool("discover", {"query": "marker"})
+                            self.assertFalse(again.is_error, again)
+                            self.assertEqual(stored, database.read_bytes())
+                        assert tools["discover"].annotations is not None
+                        assert tools["inspect"].annotations is not None
+                        self.assertFalse(tools["discover"].annotations.read_only_hint)
+                        self.assertFalse(tools["discover"].annotations.destructive_hint)
+                        self.assertTrue(tools["inspect"].annotations.read_only_hint)
+            anyio.run(exercise)
+            self.assertEqual(before, hash_bundle(bundle))
+
+    def test_extra_sources_extend_defaults_and_can_be_cleared(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            native = make_skill(root / "profile/skills", "native-marker")
+            extra = make_skill(root / "extra", "extra-marker")
+            before = [hash_bundle(p) for p in (native, extra)]
+            alias = root / "alias"
+            alias.symlink_to(root / "extra", target_is_directory=True)
+
+            async def exercise() -> None:
+                parameters = StdioServerParameters(
+                    command=sys.executable, args=["-m", "capalith.mcp_server"],
+                    cwd=str(root),
+                    env={"PATH": os.environ["PATH"], "PYTHONPATH": str(Path.cwd()),
+                         "HOME": str(root), "HERMES_HOME": str(root / "profile"),
+                         "XDG_DATA_HOME": str(root / "data")},
+                )
+                async with stdio_client(parameters) as streams:
+                    async with ClientSession(*streams) as session:
+                        await session.initialize()
+                        result = await session.call_tool("discover", {
+                            "query": "marker", "extra_source_paths": [str(root / "extra"), str(alias)],
+                        })
+                        self.assertFalse(result.is_error, result)
+                        self.assertEqual({"native-marker", "extra-marker"},
+                                         {c["name"] for c in result.structured_content["candidates"]})
+                        report = await session.call_tool("config_show", {})
+                        self.assertEqual(2, len(report.structured_content["sources"]))
+                        database = Path(report.structured_content["catalog"]["database_path"])
+                        stored = database.read_bytes()
+                        for name in ("discover", "index_skills"):
+                            mixed: dict[str, object] = {"source_paths": [str(root / "extra")], "extra_source_paths": []}
+                            if name == "discover":
+                                mixed["query"] = "marker"
+                            rejected = await session.call_tool(name, mixed)
+                            self.assertTrue(rejected.is_error)
+                        rejected = await session.call_tool("discover", {"query": "marker", "extra_source_paths": ["relative"]})
+                        self.assertTrue(rejected.is_error)
+                        again = await session.call_tool("discover", {"query": "marker"})
+                        self.assertEqual(2, len(again.structured_content["candidates"]))
+                        self.assertEqual(stored, database.read_bytes())
+                        cleared = await session.call_tool("discover", {"query": "marker", "extra_source_paths": []})
+                        self.assertEqual(["native-marker"], [c["name"] for c in cleared.structured_content["candidates"]])
+                        for arguments in (
+                            {"source_paths": [str(root / "extra")]},
+                            {"extra_source_paths": [str(root / "missing")]},
+                        ):
+                            result = await session.call_tool("index_skills", arguments)
+                            if "source_paths" in arguments:
+                                self.assertFalse(result.is_error, result)
+                                explicit = await session.call_tool("discover", {"query": "marker"})
+                                self.assertEqual(["extra-marker"], [c["name"] for c in explicit.structured_content["candidates"]])
+                            else:
+                                self.assertTrue(result.is_error)
+                                blocked = await session.call_tool("discover", {"query": "marker"})
+                                self.assertTrue(blocked.is_error)
+                                report = await session.call_tool("config_show", {})
+                                self.assertIn("source_unavailable:extra", report.structured_content["source_discovery"]["warnings"])
+                        recovered = await session.call_tool("discover", {"query": "marker", "extra_source_paths": []})
+                        self.assertEqual(["native-marker"], [c["name"] for c in recovered.structured_content["candidates"]])
+            anyio.run(exercise)
+            self.assertEqual(before, [hash_bundle(p) for p in (native, extra)])
+
+    def test_connection_extra_sources_remain_lazy_across_reconnects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_skill(root / "profile/skills", "native-marker")
+            extra = make_skill(root / "extra", "extra-marker")
+            data = root / "data"
+            parameters = StdioServerParameters(
+                command=sys.executable,
+                args=["-m", "capalith.mcp_server", "--extra-source", str(extra.parent)],
+                cwd=str(root),
+                env={"PATH": os.environ["PATH"], "PYTHONPATH": str(Path.cwd()),
+                     "HOME": str(root), "HERMES_HOME": str(root / "profile"), "XDG_DATA_HOME": str(data)},
+            )
+
+            async def exercise() -> None:
+                for connection in range(2):
+                    async with stdio_client(parameters) as streams:
+                        async with ClientSession(*streams) as session:
+                            await session.initialize()
+                            if not connection:
+                                self.assertFalse(data.exists())
+                            result = await session.call_tool("discover", {"query": "marker"})
+                            self.assertFalse(result.is_error, result)
+                            self.assertEqual({"native-marker", "extra-marker"},
+                                             {c["name"] for c in result.structured_content["candidates"]})
+                self.assertEqual(1, len(list(data.rglob("*.sqlite3"))))
+            anyio.run(exercise)
+
     def test_agent_can_connect_index_and_refresh_without_server_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -351,7 +497,10 @@ class OnboardingTests(unittest.TestCase):
                 (["--git", "https://user:secret@example.invalid/repo", "refs/heads/main"], 1),
                 (["--git", "https://example.invalid/repo", "main"], 1),
                 (["--db", str(existing), "--source", str(skill)], 2),
-
+                (["--db", str(existing), "--extra-source", str(skill)], 2),
+                (["--source", str(skill), "--extra-source", str(skill)], 2),
+                (["--git", "https://example.invalid/repo", "refs/heads/main", "--extra-source", str(skill)], 2),
+                (["--extra-source", "relative"], 2),
             ]
             for args, expected_code in cases:
                 with self.subTest(args=args):

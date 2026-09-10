@@ -9,8 +9,9 @@ Available in the default connection, without `--db`, `--source`, or `--git`. No 
 - `workspace`: optional absolute task directory. Project lookup checks supported host skill locations from there through the nearest Git root. Without a Git root, only the supplied directory is checked. Before an explicit selection, discovery uses `CLAUDE_PROJECT_DIR` when supplied by the host, then the server's working directory. The server reports the locations it finds.
 - `host_homes`: optional object with known absolute `hermes`, `claude`, or `codex` config homes. These override the corresponding server environment values, without changing the environment or host configuration. A supplied object replaces previous overrides; omitted keys fall back to the environment and conventional defaults. An empty object clears the overrides.
 - `source_paths`: optional non-empty list of absolute skill directories. This replaces automatic source selection. Use only task-authorized roots.
+- `extra_source_paths`: optional list of user-added absolute directories alongside automatically discovered roots. Native roots take precedence over extras; the first extra wins among extras. A supplied list replaces previous additions; `[]` clears them. Omission retains the connection's additions. Cannot be combined with `source_paths`.
 
-The result includes the catalog path, readiness, present artifact count, source registrations, discovered locations, and warnings. Automatic discovery reports its workspace and host homes. A no-argument repeat retains that context and refreshes the selection without a server restart. Supplying a workspace or host homes returns to automatic selection unless `source_paths` is also supplied. Invalid arguments leave the current selection intact. Failed indexing clears this connection's readiness rather than serving stale results. Source scans commit independently, not as a whole-catalog snapshot.
+The result includes the catalog path, readiness, present artifact count, source registrations, discovered locations, and warnings. Automatic discovery reports its workspace and host homes. A no-argument repeat retains context and additions and refreshes the selection without a server restart. Supplying workspace, host homes, or additions returns to automatic selection unless `source_paths` is also supplied. Invalid arguments leave the current selection intact. Failed indexing clears this connection's readiness rather than serving stale results. Source scans commit independently, not as a whole-catalog snapshot. An unavailable added root fails setup instead of silently searching only native roots.
 
 ## `discover`
 
@@ -26,6 +27,10 @@ Optional input:
 - `limit`: 1 through 50. The default is 5.
 - `offset`: a non-negative page offset. The default is 0.
 - `view_id`: the `d1:` identifier returned by an earlier page of the same result set.
+
+In the default connection, `discover` also accepts the same `workspace`, `host_homes`, `source_paths`, and `extra_source_paths` inputs as `index_skills`. First search and changed context prepare a local catalog, then return the normal search result. Repeating the same context does not rescan. Later source edits require `index_skills`. `config_show` is optional, not a prerequisite.
+
+This default-mode tool is annotated as catalog-writing and non-destructive. `--db`, `--source`, and `--git` keep `discover` read-only and reject these extra inputs. No mode activates skills or edits source files or host configuration.
 
 Read only the fields needed for the task:
 
@@ -82,7 +87,7 @@ Keep any missing or ambiguous relationship information. Do not infer an artifact
 
 ## `config_show`
 
-`config_show` takes no input and never initializes or refreshes a catalog. In agent-managed mode it reports readiness and probes supported source locations. Use it before first-use indexing or when source IDs, source status, or available features affect the task. It reports available files, not host activation, usage, or permission to change a source.
+`config_show` takes no input and never initializes or refreshes a catalog. In agent-managed mode it reports readiness and probes supported source locations and additions. It is an optional preview or diagnostic, not a required first call. It reports available files, not host activation, usage, or permission to change a source.
 
 ## Pass a result to the host
 
@@ -104,7 +109,7 @@ Capalith returns IDs and stored data. The agent decides whether to use Capalith 
 - `stale_artifact`: the `artifact_id` and `content_digest` are no longer current. Use `discover` if the task needs the current version.
 - `artifact_not_found`: no current artifact matches the ID. Use `discover` with the same selected sources if the task needs a replacement. Do not invent an ID.
 - `resource_not_found`: inspect the artifact summary and choose a returned path, or stop.
-- `index_required`: use `index_skills` if exposed, then retry the query.
+- `index_required`: no ready catalog exists. A first `discover` handles initial setup in the default mode. After failed setup, correct the cause and explicitly refresh with `index_skills`, or supply corrected context to `discover`; unchanged searches do not retry setup.
 - `no_skill_sources`: no supported source directory was found. Use a task-supplied workspace or explicit skill directory if available; otherwise report the missing source. Do not crawl the disk.
 - `catalog_setup_failed`: read `config_show` warnings and check the selected roots and writable data location. Correct the cause before retrying; do not silently expand the selection.
 - `source_unavailable`: report the unavailable source. Do not enable it. In agent-managed mode, refresh only if the existing selection is still authorized and the source is accessible again.

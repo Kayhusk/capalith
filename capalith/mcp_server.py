@@ -42,6 +42,7 @@ _INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "query": {
                 "type": "string",
                 "minLength": 1,
+                "pattern": "\\S",
                 "description": "Natural-language task to search for.",
             },
             "source_ids": {
@@ -183,7 +184,7 @@ _INDEX_TOOL = types.Tool(
     name="index_skills",
     description=(
         "Find and index installed Codex, Claude Code and current Hermes profile skill directories. "
-        "On first use or project change, supply the actual task workspace before discover. "
+        "Refresh the current selection or select different sources; discover also handles first-use setup. "
         "Supply host_homes from known host context if the client's environment omitted a custom home. "
         "No-argument calls refresh the selection; source_paths selects only explicit custom roots. "
         "Creates Capalith's catalog, never edits sources or activates skills. config_show previews roots."
@@ -195,6 +196,13 @@ _INDEX_TOOL = types.Tool(
                 "type": "array", "minItems": 1,
                 "items": {"type": "string", "minLength": 1},
                 "description": "Absolute skill directories selected by the user or task.",
+            },
+            "extra_source_paths": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "description": "User-added absolute skill directories alongside host defaults, after them in priority. "
+                               "Replaces previous additions; [] clears them. Omit to retain. "
+                               "Cannot be combined with source_paths, which selects only explicit roots.",
             },
             "workspace": {"type": "string", "minLength": 1,
                           "description": "Absolute task workspace; falls back to CLAUDE_PROJECT_DIR, then server cwd."},
@@ -213,6 +221,22 @@ _INDEX_TOOL = types.Tool(
     annotations=types.ToolAnnotations(
         read_only_hint=False, destructive_hint=False, open_world_hint=False,
     ),
+)
+_AUTO_DISCOVER_TOOL = types.Tool(
+    name="discover",
+    description=(
+        "Search Agent Skills by task, including known skills and declared relationships. "
+        "The first search prepares a local catalog from supported host skill directories. "
+        "workspace and host_homes select task/profile context when it differs from the server. "
+        "Repeated searches read the snapshot; index_skills explicitly refreshes it. "
+        "Writes only Capalith's catalog, never sources or host settings; does not load or activate skills."
+    ),
+    input_schema={
+        **_INPUT_SCHEMAS["discover"],
+        "properties": {**_INPUT_SCHEMAS["discover"]["properties"], **_INDEX_TOOL.input_schema["properties"]},
+    },
+    output_schema=_OUTPUT_SCHEMA,
+    annotations=_INDEX_TOOL.annotations,
 )
 _CATALOG_CODES = {
     "artifact_not_found",
@@ -256,13 +280,21 @@ def _store_call(database: Path, name: str, arguments: dict[str, Any]) -> dict[st
     return store.traverse(**values)
 
 
-def create_server(database: Path | None = None, *, managed: bool = False) -> Server[Any]:
+def create_server(
+    database: Path | None = None, *, managed: bool = False, extra_paths: Sequence[Path] = (),
+) -> Server[Any]:
+    if extra_paths and (database is not None or managed):
+        raise ValueError("extra sources require automatic source discovery")
+    if any(not path.is_absolute() for path in extra_paths):
+        raise ValueError("extra sources must be absolute")
     agent_managed = database is None
     catalog_lock = anyio.Lock()
     selected_paths: list[Path] | None = None
     selected_workspace: Path | None = None
     selected_homes: dict[str, Path] = {}
-    tools = [*_TOOLS, _INDEX_TOOL] if agent_managed else _TOOLS
+    selected_extras = list(extra_paths)
+    setup_attempted = False
+    tools = [_AUTO_DISCOVER_TOOL, *_TOOLS[1:], _INDEX_TOOL] if agent_managed else _TOOLS
     validators = {tool.name: Draft202012Validator(tool.input_schema) for tool in tools}
     bundle = files("capalith").joinpath("skills/capalith")
     guides = {
@@ -295,7 +327,7 @@ def create_server(database: Path | None = None, *, managed: bool = False) -> Ser
     async def call_tool(
         _context: object, params: types.CallToolRequestParams
     ) -> types.CallToolResult:
-        nonlocal database, selected_paths, selected_workspace, selected_homes
+        nonlocal database, selected_paths, selected_workspace, selected_homes, selected_extras, setup_attempted
         name = params.name
         if name not in validators:
             raise MCPError(types.METHOD_NOT_FOUND, "Unknown tool")
@@ -305,31 +337,48 @@ def create_server(database: Path | None = None, *, managed: bool = False) -> Ser
             if errors:
                 return _failure("invalid_request")
             async with catalog_lock:
-                if name == "index_skills":
+                if agent_managed and name in ("index_skills", "discover"):
+                    # Keep cross-field validation here: some hosts rewrite JSON Schema `not` clauses.
+                    if "source_paths" in arguments and "extra_source_paths" in arguments:
+                        return _failure("invalid_request")
                     workspace = Path(arguments["workspace"]) if "workspace" in arguments else selected_workspace
                     homes = ({host: Path(p) for host, p in arguments["host_homes"].items()}
                              if "host_homes" in arguments else selected_homes)
-                    roots = None if "workspace" in arguments or "host_homes" in arguments else selected_paths
+                    extras = ([Path(p) for p in arguments["extra_source_paths"]]
+                              if "extra_source_paths" in arguments else selected_extras)
+                    roots = None if any(key in arguments for key in ("workspace", "host_homes", "extra_source_paths")) else selected_paths
                     if "source_paths" in arguments:
                         roots = [Path(p) for p in arguments["source_paths"]]
                     if (workspace is not None and not workspace.is_absolute()) or (
                         roots is not None and any(not root.is_absolute() for root in roots)
-                    ) or any(not home.is_absolute() for home in homes.values()):
+                    ) or any(not path.is_absolute() for path in [*homes.values(), *extras]):
                         return _failure("invalid_request")
-                    selected_workspace, selected_paths, selected_homes = workspace, roots, homes
-                    database = None
-                    try:
-                        if roots is None:
-                            discovery = await run_sync(lambda: discover_sources(selected_workspace, selected_homes))
-                            discovered = discovery["sources"]
-                            assert isinstance(discovered, list)
-                            roots = [Path(s["path"]) for s in discovered]
-                        if not roots:
-                            return _failure("no_skill_sources")
-                        database = await run_sync(lambda: prepare_catalog(roots))
-                    except Exception:
-                        return _failure("catalog_setup_failed")
-                    name = "config_show"
+                    changed = (workspace, roots, homes, extras) != (selected_workspace, selected_paths, selected_homes, selected_extras)
+                    if name == "index_skills" or changed or not setup_attempted:
+                        selected_workspace, selected_paths, selected_homes = workspace, roots, homes
+                        selected_extras = extras
+                        database = None
+                        setup_attempted = True
+                        try:
+                            if roots is None:
+                                discovery = await run_sync(lambda: discover_sources(selected_workspace, selected_homes, selected_extras))
+                                warnings = discovery["warnings"]
+                                assert isinstance(warnings, list)
+                                if "source_unavailable:extra" in warnings:
+                                    return _failure("catalog_setup_failed")
+                                discovered = discovery["sources"]
+                                assert isinstance(discovered, list)
+                                roots = [Path(s["path"]) for s in discovered]
+                            if not roots:
+                                return _failure("no_skill_sources")
+                            database = await run_sync(lambda: prepare_catalog(roots))
+                        except Exception:
+                            return _failure("catalog_setup_failed")
+                    if name == "index_skills":
+                        name = "config_show"
+                    else:
+                        arguments = {key: value for key, value in arguments.items()
+                                     if key not in _INDEX_TOOL.input_schema["properties"]}
                 if agent_managed and name == "config_show":
                     value = await run_sync(lambda: _configuration_report(database))
                     artifacts = await run_sync(Store(database, read_only=True).list_artifacts) if database else []
@@ -341,15 +390,17 @@ def create_server(database: Path | None = None, *, managed: bool = False) -> Ser
                     value["source_discovery"] = (
                         {"sources": [{"path": str(p), "origins": ["explicit"]} for p in selected_paths],
                          "warnings": []} if selected_paths is not None else
-                        await run_sync(lambda: discover_sources(selected_workspace, selected_homes))
+                        await run_sync(lambda: discover_sources(selected_workspace, selected_homes, selected_extras))
                     )
                     value["automatic_behavior"] = {
                         "source_discovery": "documented_host_locations",
-                        "source_scan": "agent_invoked", "automatic_refresh": "agent_invoked",
+                        "source_scan": "first_discover_or_context_change_or_index_skills",
+                        "automatic_refresh": "context_change_only",
                     }
                     capabilities = value["capabilities"]
                     assert isinstance(capabilities, dict)
                     capabilities["agent_indexing"] = "available"
+                    capabilities["automatic_refresh"] = "context_change_only"
                     return _success(value)
                 active_database = database
                 if active_database is None:
@@ -395,8 +446,8 @@ def create_server(database: Path | None = None, *, managed: bool = False) -> Ser
     return server
 
 
-async def _serve(database: Path | None, managed: bool = False) -> None:
-    server = create_server(database, managed=managed)
+async def _serve(database: Path | None, managed: bool = False, extra_paths: Sequence[Path] = ()) -> None:
+    server = create_server(database, managed=managed, extra_paths=extra_paths)
     async with stdio_server() as (read_stream, write_stream):
         incoming_send, incoming_receive = anyio.create_memory_object_stream[Any](0)
 
@@ -437,7 +488,7 @@ async def _serve(database: Path | None, managed: bool = False) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="capalith-mcp",
-        description="Agent-led skill discovery and indexing over stdio; --db keeps tools read-only.",
+        description="Skill search with first-use catalog setup over stdio; --db keeps tools read-only.",
     )
     parser.add_argument("--db", type=Path, metavar="PATH", help="existing database; no setup or refresh")
     parser.add_argument(
@@ -448,10 +499,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--git", nargs=2, action="append", metavar=("URL", "REF"),
         help="Git branch or tag to index at startup; repeat in priority order after local sources",
     )
+    parser.add_argument(
+        "--extra-source", type=Path, action="append", default=[], metavar="ROOT",
+        help="add an absolute skill directory alongside host defaults; repeat in priority order",
+    )
     arguments = parser.parse_args(argv)
     managed = bool(arguments.source or arguments.git)
     if arguments.db and managed:
         parser.error("--db cannot be combined with --source/--git")
+    if arguments.extra_source and (arguments.db or managed):
+        parser.error("--extra-source cannot be combined with --db/--source/--git")
+    if any(not path.is_absolute() for path in arguments.extra_source):
+        parser.error("--extra-source requires an absolute path")
     try:
         if managed:
             try:
@@ -467,7 +526,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             database = Path(os.path.abspath(arguments.db))
         else:
             database = None
-        anyio.run(_serve, database, managed)
+        anyio.run(_serve, database, managed, arguments.extra_source)
     except Exception:
         print("internal_error", file=sys.stderr)
         return 1
