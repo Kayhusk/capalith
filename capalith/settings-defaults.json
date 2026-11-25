@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "search": {
+    "default_limit": 5,
+    "max_limit": 50,
+    "lexical_candidates": 1000,
+    "rrf_k": 60,
+    "minimum_similarity": 0.66,
+    "stopwords": [],
+    "operator": "OR",
+    "weights": {
+      "path": 3.0,
+      "body": 1.0
+    },
+    "fusion_weights": {
+      "lexical": 1.0,
+      "semantic": 1.0
+    },
+    "excerpt_chars": 240,
+    "cached_catalogs": 2,
+    "cache_max_bytes": 1073741824
+  },
+  "traversal": {
+    "default_limit": 10,
+    "max_limit": 100,
+    "max_depth": 3
+  },
+  "semantic": {
+    "enabled": true,
+    "profile": "bge-small-en-v1.5",
+    "threads": 1,
+    "batch_size": 1,
+    "download_bytes": 67415030,
+    "idle_release_seconds": 300.0,
+    "projection": {
+      "body_chars": 64,
+      "version": 1
+    },
+    "model": {
+      "id": "BAAI/bge-small-en-v1.5",
+      "artifact": "Qdrant/bge-small-en-v1.5-onnx-Q",
+      "revision": "52398278842ec682c6f32300af41344b1c0b0bb2",
+      "dimensions": 384,
+      "dir": "",
+      "files": {
+        "README.md": "3bf78bc7cb0def03b30a901331fa50ace3ddf7d6e411d7089a8a2db64f066f03",
+        "config.json": "13582bcf2effc85b7bf3d3f5532e686bc1c9ce86bb009d10f0ec33cbe92299dd",
+        "model_optimized.onnx": "51f1bd0addd6e859e42c2c8021a5e5461385bb676a649f4b269aa445449f2431",
+        "ort_config.json": "99881c45e073696289224931dd48694398bc6bcd1fe7cb7018bca1e0cc00e1fc",
+        "special_tokens_map.json": "5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a",
+        "tokenizer.json": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+        "tokenizer_config.json": "0b29c7bfc889e53b36d9dd3e686dd4300f6525110eaa98c76a5dafceb2029f53",
+        "vocab.txt": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+      }
+    }
+  },
+  "storage": {
+    "keep_old_vectors": false,
+    "data_dir": "",
+    "busy_timeout_seconds": 5.0
+  },
+  "sources": {
+    "workspace_env": "CLAUDE_PROJECT_DIR",
+    "extra": [],
+    "shared_user_dirs": ["~/.agents/skills"],
+    "shared_project_dirs": [".agents/skills"],
+    "hermes_config_max_bytes": 1048576,
+    "hosts": {
+      "hermes": {
+        "home_env": "HERMES_HOME",
+        "home_default": "~/.hermes",
+        "user_dirs": ["skills"],
+        "project_dirs": [".hermes/skills"]
+      },
+      "claude": {
+        "home_env": "CLAUDE_CONFIG_DIR",
+        "home_default": "~/.claude",
+        "user_dirs": ["skills"],
+        "project_dirs": [".claude/skills"]
+      },
+      "codex": {
+        "home_env": "CODEX_HOME",
+        "home_default": "~/.codex",
+        "user_dirs": ["skills"],
+        "project_dirs": []
+      }
+    }
+  },
+  "git": {
+    "timeout_seconds": 10.0,
+    "fetch_timeout_seconds": 60.0
+  },
+  "security": {
+    "allow_call_sources": true
+  },
+  "answer": {
+    "detail": "short",
+    "default_limit": 3,
+    "summary_chars": 100,
+    "max_matched_words": 3,
+    "hide_words": [
+      "a",
+      "an",
+      "and",
+      "are",
+      "as",
+      "at",
+      "be",
+      "by",
+      "can",
+      "do",
+      "for",
+      "from",
+      "how",
+      "i",
+      "if",
+      "in",
+      "is",
+      "it",
+      "its",
+      "me",
+      "my",
+      "of",
+      "on",
+      "or",
+      "so",
+      "that",
+      "the",
+      "this",
+      "to",
+      "use",
+      "want",
+      "we",
+      "what",
+      "when",
+      "with",
+      "you",
+      "your",
+      "feel",
+      "need",
+      "would",
+      "like",
+      "help",
+      "get",
+      "make",
+      "have",
+      "just",
+      "some",
+      "about",
+      "into",
+      "should",
+      "could",
+      "up",
+      "over",
+      "who",
+      "long",
+      "out",
+      "off",
+      "down",
+      "than",
+      "then",
+      "there",
+      "they",
+      "them",
+      "was",
+      "were",
+      "will",
+      "has",
+      "had",
+      "not",
+      "but",
+      "all",
+      "any",
+      "more",
+      "most",
+      "only",
+      "very",
+      "also",
+      "now",
+      "here",
+      "where",
+      "which",
+      "while",
+      "after",
+      "before"
+    ],
+    "close_margin": 0.02,
+    "redirects": true,
+    "max_redirects": 2,
+    "messages": {
+      "exact": "Exact name.",
+      "good": "Good match.",
+    "possible": "Possible match. Read the first summary before you load it.",
+      "weak": "Maybe: {signal}. Read the summary; if it is not what you need, carry on without a skill.",
+      "close": "Close matches; pick by the summaries.",
+      "no_match": "No skill in the catalog fits this task. Nearest by wording (probably not what you need): {nearest}. Carry on without one.",
+    "no_match_nearest": "None of the {sent} nearest skills fits this task. Carry on without one."
+    },
+    "max_chars": 1200,
+    "refuse_below": 0.0,
+    "good_from": 0.0
+  },
+  "compatibility": {
+    "semantic_fingerprint": "af7a975567f4b15ba4806df15130c51ede1f3c7be5f76a5c4045da6efb237ec2",
+    "semantic_key": "Qdrant/bge-small-en-v1.5-onnx-Q@52398278842ec682c6f32300af41344b1c0b0bb2"
+  }
+}

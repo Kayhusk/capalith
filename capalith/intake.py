@@ -20,6 +20,7 @@ from capalith.identity import (
     artifact_id,
 )
 from capalith.store import ArtifactObservation, GitRevision, Source, Store, StoreError
+from capalith.settings import load_settings, settings_operation
 
 _OpenBundle = tuple[str, int, _Metadata]
 _Discovery = tuple[Path, list[int], tuple[_OpenBundle, ...]]
@@ -77,7 +78,7 @@ def _observe_bundle(
 def _run_git(
     arguments: list[str],
     environment: dict[str, str],
-    timeout: int,
+    timeout: float,
     message: str,
     *,
     stdout_descriptor: int | None = None,
@@ -100,9 +101,11 @@ def _run_git(
     return b"" if stdout_descriptor is not None else result.stdout
 
 
+@settings_operation
 def _stage_git_source(
     source: Source,
 ) -> tuple[GitRevision, tuple[ArtifactObservation, ...]]:
+    timeouts = load_settings()["git"]
     requested_ref = source.requested_ref
     if (
         source.kind != "git"
@@ -139,13 +142,13 @@ def _stage_git_source(
         _run_git(
             ["check-ref-format", requested_ref],
             environment,
-            10,
+            timeouts["timeout_seconds"],
             "could not validate Git branch or tag reference",
         )
         advertisement = _run_git(
             ["ls-remote", "--refs", "--exit-code", source.locator, requested_ref],
             environment,
-            10,
+            timeouts["timeout_seconds"],
             "could not look up Git branch or tag reference",
         )
         expected_suffix = b"\t" + requested_ref.encode("utf-8") + b"\n"
@@ -162,7 +165,7 @@ def _stage_git_source(
         _run_git(
             ["init", "--bare", f"--object-format={object_format}", str(repository)],
             environment,
-            10,
+            timeouts["timeout_seconds"],
             "could not initialize temporary Git repository",
         )
         _run_git(
@@ -178,7 +181,7 @@ def _stage_git_source(
                 f"{requested_ref}:refs/capalith/input",
             ],
             environment,
-            60,
+            timeouts["fetch_timeout_seconds"],
             "could not fetch Git branch or tag reference",
         )
         resolved = _run_git(
@@ -191,7 +194,7 @@ def _stage_git_source(
                 "refs/capalith/input^{commit}",
             ],
             environment,
-            10,
+            timeouts["timeout_seconds"],
             "could not resolve fetched Git commit",
         )
         if re.fullmatch(rb"[0-9A-Fa-f]+\n", resolved) is None or len(resolved) != len(
@@ -212,7 +215,7 @@ def _stage_git_source(
                 resolved_commit,
             ],
             environment,
-            10,
+            timeouts["timeout_seconds"],
             "could not inspect fetched Git files",
         )
         tree_records: list[tuple[bytes, bytes, tuple[str, ...]]] = []
@@ -329,7 +332,7 @@ def _stage_git_source(
                             object_id.decode("ascii"),
                         ],
                         environment,
-                        10,
+                        timeouts["timeout_seconds"],
                         "could not read fetched Git file",
                         stdout_descriptor=file_descriptor,
                     )

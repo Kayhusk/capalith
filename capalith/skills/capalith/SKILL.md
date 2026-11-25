@@ -5,8 +5,10 @@ license: MIT
 compatibility: "Requires a configured Capalith MCP server."
 metadata:
   author: "Edward Bowie"
-  version: "0.1.3"
+  version: "0.2.1"
 ---
+
+Call `discover` at the start of a task when no skill you already have covers it.
 
 # Capalith
 
@@ -16,7 +18,7 @@ Capalith searches indexed Agent Skills, reads their stored files, and follows de
 
 Capalith provides catalog navigation across supported host skill directories and user-added folders. Search, stored resources, and declared relationships remain available whether or not a relevant skill is already known or loaded.
 
-The agent decides when to search and which results are useful. Capalith does not impose a search-first workflow or replace native skill loading.
+The agent decides when to search and which results are useful. Capalith never runs on its own, never loads a skill for you, and does not replace native skill loading.
 
 Do not use it to install or activate skills, execute bundled code, repair content, or change host configuration. Indexing changes only Capalith's catalog.
 
@@ -38,13 +40,14 @@ Searches with unchanged context read the existing snapshot, including pagination
 
 A directory match does not prove host activation, trust, or use. Discovery is bounded to supported host locations, the current Hermes profile, and user-added folders. It does not search other profiles or the whole disk. Use the default server workspace only when no task workspace is known, and report that limitation.
 
-Servers connected with `--db`, `--source`, or `--git` expose only read-only tools and reject search context arguments. They cannot use `--extra-source`. Follow their connection's refresh policy.
+Servers connected with `--db`, `--source`, or `--git` keep the selected catalog read-only and reject search context arguments. `discover` can maintain its separate ranking cache, so it is marked writing and non-destructive. The other query tools remain read-only. These modes cannot use `--extra-source`; follow their connection's refresh policy.
 
 ## Choose a tool
 
 Call only the tools the task needs.
 
 - Use `discover` when you need to find or compare skills for a task. Pass `source_ids` only when the user or task has already selected the sources.
+- Check `ranking.path`: AI is available with the user's own TypeSafe key or a host-managed transport; `free` includes the fallback reason. For the built-in route, the host sets `CAPALITH_RANKING=typesafe` and its dedicated `TYPESAFE_API_KEY` only in the MCP server's own secret or environment entry. An agent's tools could read that environment; a malicious skill could try. Capalith supplies no key; never request, read, print or put a key in chat, search arguments or a catalog. A successful AI abstention has no candidates or recommended skill. Do not invent one from an empty result. Only an explicit search can call the provider, with the query and scoped skill descriptions/excerpts. Built-in ranking has no spending cap: the user monitors usage and revokes the dedicated key to stop further spending; a host-managed client can enforce its own budget. Local ranking remains available without an enabled route.
 - Use `inspect` when the task provides an exact `artifact_id` and `content_digest` and needs stored metadata, a resource list, or one resource.
 - Use `traverse` when the task provides an exact `artifact_id` and `content_digest` and declared requirements, complements, alternatives, conflicts, or supersession affect the choice.
 - Use `config_show` when configured source IDs, source states, or Capalith capabilities affect the decision.

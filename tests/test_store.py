@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,7 +23,7 @@ class StoreTests(unittest.TestCase):
             '"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
             '"size":7}]}'
         )
-        with sqlite3.connect(database) as connection:
+        with closing(sqlite3.connect(database)) as connection, connection:
             connection.executescript(
                 """
                 CREATE TABLE sources(
@@ -96,7 +97,7 @@ class StoreTests(unittest.TestCase):
             store.initialize()
             store.initialize()
 
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 self.assertEqual(
                     store_module.SCHEMA_VERSION,
                     connection.execute("PRAGMA user_version").fetchone()[0],
@@ -115,13 +116,13 @@ class StoreTests(unittest.TestCase):
             self.assertEqual([source], store.list_sources())
 
             future = temp / "future.sqlite3"
-            with sqlite3.connect(future) as connection:
+            with closing(sqlite3.connect(future)) as connection, connection:
                 connection.execute(
                     f"PRAGMA user_version={store_module.SCHEMA_VERSION + 1}"
                 )
-            with self.assertRaisesRegex(StoreError, r"^unsupported store schema version:"):
+            with self.assertRaisesRegex(StoreError, r"^catalog_newer: this catalog was written by a newer Capalith"):
                 Store(future).initialize()
-            with sqlite3.connect(future) as connection:
+            with closing(sqlite3.connect(future)) as connection, connection:
                 self.assertEqual(
                     store_module.SCHEMA_VERSION + 1,
                     connection.execute("PRAGMA user_version").fetchone()[0],
@@ -144,7 +145,7 @@ class StoreTests(unittest.TestCase):
             self.assertEqual("src_00000000000000000000000000000001", source.id)
             self.assertEqual("enabled", source.status)
             self.assertIsNone(source.requested_ref)
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 self.assertEqual(
                     store_module.SCHEMA_VERSION,
                     connection.execute("PRAGMA user_version").fetchone()[0],
@@ -174,7 +175,7 @@ class StoreTests(unittest.TestCase):
             store.apply_scan(multiple.id, (), older_revision)
             store.apply_scan(multiple.id, (), current_revision)
 
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute("DROP TABLE current_git_revisions")
                 connection.execute("PRAGMA user_version=6")
 
@@ -186,7 +187,7 @@ class StoreTests(unittest.TestCase):
                 rf"^Git source requires a fresh scan: {multiple.id}$",
             ):
                 store.git_source_snapshot(multiple.id)
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 self.assertEqual(
                     1,
                     connection.execute(
@@ -211,7 +212,7 @@ class StoreTests(unittest.TestCase):
                 with self.assertRaises(sqlite3.Error):
                     store.initialize()
 
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 self.assertEqual(1, connection.execute("PRAGMA user_version").fetchone()[0])
                 self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM sources").fetchone()[0])
                 self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0])

@@ -25,6 +25,7 @@ dependencies = [
     "mcp-types==2.1.1",
     "pydantic==2.13.5",
     "fastembed==0.8.0",
+    "numpy==2.4.6",
     "huggingface-hub==1.29.0",
 ]
 
@@ -42,6 +43,9 @@ version = { attr = "capalith.__version__" }
 
 [tool.setuptools.package-data]
 capalith = [
+    "model-profiles.json",
+    "ranking-policy.json",
+    "settings-defaults.json",
     "skills/capalith/SKILL.md",
     "skills/capalith/references/*.md",
 ]

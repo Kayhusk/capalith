@@ -1,0 +1,29 @@
+{
+  "model": "typesafe-ai/jev-1.14.0",
+  "typesafe": {
+    "enable_env": "CAPALITH_RANKING",
+    "enable_value": "typesafe",
+    "key_env": "TYPESAFE_API_KEY",
+    "transport": "capalith.typesafe:call",
+    "endpoint": "https://api.typesafe.ai/v1/systemone",
+    "max_response_bytes": 2000000
+  },
+  "timeout_seconds": 5,
+  "worker_grace_seconds": 1,
+  "max_worker_output_bytes": 2000000,
+  "shortlist": 10,
+  "body_excerpt_chars": 700,
+  "none_key": "__none_applies__",
+  "none_threshold": 0.3,
+  "wide_candidates": 200,
+  "max_choices": 255,
+  "max_request_bytes": 240000,
+  "max_configuration_bytes": 65536,
+  "max_timeout_seconds": 60,
+  "max_cache_bytes": 2000000,
+  "cache_views": 64,
+  "cache_max_age_seconds": 3600,
+  "wide_instructions": "Select the skill most useful for fulfilling the latest request. Consider its documented purpose.",
+  "verify_instructions": "Select the skill whose actual instructions best help fulfill the request. Choose __none_applies__ if none of the offered skills provides relevant task expertise or a procedure for this request. A general convention that applies to every response is not sufficient on its own.",
+  "none_description": "None of these skills directly supports the requested task; the request is ordinary conversation or requires a capability not offered here."
+}

@@ -180,8 +180,8 @@ class OnboardingTests(unittest.TestCase):
             async def exercise() -> None:
                 parameters = StdioServerParameters(
                     command=sys.executable, args=["-m", "capalith.mcp_server"],
-                    env={**os.environ, "HOME": str(root), "HERMES_HOME": str(root / "hermes"),
-                         "XDG_DATA_HOME": str(data)},
+                    env={"PATH": os.environ["PATH"], "HOME": str(root), "HERMES_HOME": str(root / "hermes"),
+                         "XDG_DATA_HOME": str(data), "XDG_CONFIG_HOME": str(root/"config"), "XDG_CACHE_HOME": str(root/"cache")},
                 )
                 async with stdio_client(parameters) as streams:
                     async with ClientSession(*streams) as session:
@@ -205,13 +205,13 @@ class OnboardingTests(unittest.TestCase):
                             retry = await session.call_tool("index_skills", {})
                             self.assertFalse(retry.is_error, retry)
                             self.assertEqual(str(database), retry.structured_content["catalog"]["database_path"])
-                        first = await session.call_tool("discover", {"query": "agent-first"})
+                        first = await session.call_tool("discover", {"query": "agent-first", "detail": "full"})
                         self.assertFalse(first.is_error)
                         original = first.structured_content["candidates"][0]
                         (bundle / "references/data.bin").write_bytes(b"second")
                         refreshed = await session.call_tool("index_skills", {"source_paths": [str(source)]})
                         self.assertFalse(refreshed.is_error)
-                        second = await session.call_tool("discover", {"query": "agent-first"})
+                        second = await session.call_tool("discover", {"query": "agent-first", "detail": "full"})
                         updated = second.structured_content["candidates"][0]
                         self.assertEqual(original["artifact_id"], updated["artifact_id"])
                         self.assertNotEqual(original["content_digest"], updated["content_digest"])
@@ -321,7 +321,7 @@ class OnboardingTests(unittest.TestCase):
                                  *(str(p) for p in other_roots)},
                                 {s["locator"] for s in result["sources"]},
                             )
-                            found = await session.call_tool("discover", {"query": "marker"})
+                            found = await session.call_tool("discover", {"query": "marker", "limit": 10})
                             self.assertEqual({"profile-marker", workspace.name + "-marker",
                                               "custom-claude-marker", "custom-codex-marker"},
                                              {c["name"] for c in found.structured_content["candidates"]})
@@ -610,7 +610,7 @@ class OnboardingTests(unittest.TestCase):
                         database = Path(config["catalog"]["database_path"])
                         self.assertTrue(database.is_relative_to(data))
                         stored_before = database.read_bytes()
-                        result = await session.call_tool("discover", {"query": "onboarding-demo"})
+                        result = await session.call_tool("discover", {"query": "onboarding-demo", "detail": "full"})
                         self.assertFalse(result.is_error)
                         assert result.structured_content is not None
                         candidates = result.structured_content["candidates"]

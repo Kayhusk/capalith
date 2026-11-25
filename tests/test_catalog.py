@@ -1,5 +1,7 @@
 import os
 import sqlite3
+from contextlib import closing
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,6 +53,35 @@ def catalog_observation(bundle: Path):
     {"CAPALITH_SEMANTIC_MODEL": "/missing-capalith-test-model"},
 )
 class CatalogTests(unittest.TestCase):
+    def test_hyphenated_exact_name_precedes_incidental_body_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_catalog_skill(root / "skills", "check-layout", body="irrelevant " * 2000)
+            make_catalog_skill(root / "skills", "incidental", body="check layout " * 20)
+            store = Store(root / "catalog.sqlite3")
+            store.initialize()
+            source = store.add_local_source(root / "skills")
+            scan_local_source(store, source.id)
+            for query in ("check-layout", "CHECK-LAYOUT", "check layout"):
+                result = store.discover(query)
+                self.assertEqual("check-layout", result["candidates"][0]["name"])
+
+    def test_hyphenated_exact_name_keeps_its_semantic_bypass_below_the_gate(self) -> None:
+        document = struct.pack("<384f", 1.0, *([0.0] * 383))
+        query = struct.pack("<384f", 0.0, 1.0, *([0.0] * 382))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_catalog_skill(root / "skills", "check-layout")
+            store = Store(root / "catalog.sqlite3")
+            store.initialize()
+            source = store.add_local_source(root / "skills")
+            with patch("capalith.semantic.embed_documents", side_effect=lambda texts: tuple(document for _ in texts)):
+                scan_local_source(store, source.id)
+            with patch("capalith.store._semantic_query_vector", return_value=query):
+                result = store.discover("check-layout")
+            self.assertEqual("check-layout", result["candidates"][0]["name"])
+            self.assertEqual(0.0, result["candidates"][0]["score"]["semantic_similarity"])
+
     def test_invalid_skill_metadata_is_not_admitted(self) -> None:
         cases = (
             (
@@ -125,7 +156,7 @@ class CatalogTests(unittest.TestCase):
                 "---\nname: alpha\ndescription: Alpha.\n---\nquasar evidence\n",
                 encoding="utf-8",
             )
-            with sqlite3.connect(store.path) as connection:
+            with closing(sqlite3.connect(store.path)) as connection, connection:
                 connection.execute(
                     "CREATE TRIGGER fail_catalog_publication "
                     "BEFORE INSERT ON catalog_resources "
@@ -157,6 +188,24 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual("alpha", result["candidates"][0]["name"])
             self.assertEqual(["alpha"], [item["bundle_path"] for item in store.list_artifacts()])
             self.assertEqual("alpha", store.discover("nebula")["candidates"][0]["name"])
+
+    def test_hostile_skill_text_is_data_even_with_fts_syntax_and_large_unicode_body(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            source_root = temp / "source"
+            make_catalog_skill(source_root, "alpha", body="nebula evidence\n")
+            make_catalog_skill(source_root, "beta", body="planet evidence\n")
+            store = Store(temp / "catalog.sqlite3")
+            store.initialize()
+            source = store.add_local_source(source_root)
+            scan_local_source(store, source.id)
+            before = [item["name"] for item in store.discover("nebula")["candidates"]]
+            make_catalog_skill(source_root, "hostile", body=('\" OR NOT NEAR(alpha beta) body:* -path:SKILL.md\n' + '漢字 e\u0301 \u200d 🚀\n' * 20000))
+            scan_local_source(store, source.id)
+            after = [item["name"] for item in store.discover("nebula")["candidates"]]
+            self.assertEqual(before, after)
+            self.assertEqual("alpha", store.discover("alpha")["candidates"][0]["name"])
+            self.assertEqual(3, len(store.list_artifacts()))
 
     def test_discovery_skips_nested_hidden_bundles_but_accepts_hidden_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -279,7 +328,11 @@ class CatalogTests(unittest.TestCase):
             source = store.add_local_source(source_root)
             scan_local_source(store, source.id)
 
-            with patch("capalith.store._LEXICAL_MATCH_LIMIT", 1):
+            # search.lexical_candidates is kept for compatibility and no longer limits the word search: every match is read
+            config = temp / "settings.toml"
+            config.write_text("version = 1\n[search]\nlexical_candidates = 1\n")
+            config.chmod(0o600)
+            with patch.dict(os.environ, {"CAPALITH_CONFIG": str(config)}):
                 result = cast(dict[str, Any], store.discover("nebula", limit=20))
 
             self.assertEqual(
@@ -379,7 +432,7 @@ class CatalogTests(unittest.TestCase):
             )
             scan_local_source(store, preferred.id)
 
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 preserved_counts = tuple(
                     connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                     for table in ("artifact_versions", "catalog_entries", "catalog_fts")
@@ -412,7 +465,7 @@ class CatalogTests(unittest.TestCase):
                 historical_digest,
                 {version["digest"] for version in inspection["versions"]},
             )
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 self.assertEqual(
                     {"artifact_git_revisions", "current_git_revisions"},
                     {
@@ -547,7 +600,7 @@ class CatalogTests(unittest.TestCase):
             beta_source = store.add_local_source(beta_root)
             scan_local_source(store, alpha_source.id)
             scan_local_source(store, beta_source.id)
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute("PRAGMA journal_mode=WAL")
             before = cast(dict[str, Any], store.discover("nebula"))
 

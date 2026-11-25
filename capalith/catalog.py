@@ -10,6 +10,7 @@ import yaml
 from yaml.nodes import MappingNode, ScalarNode
 
 from capalith.identity import BundleManifest, FileRecord
+from capalith.settings import load_settings
 
 CATALOG_FORMAT_VERSION = 1
 _NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -63,7 +64,9 @@ def extract_catalog(
         _resource(file, _read_manifest_file(bundle_descriptor, file))
         for file in manifest.files
     )
-    skill = next((resource for resource in resources if resource.path == "SKILL.md"), None)
+    skill = next(
+        (resource for resource in resources if resource.path == "SKILL.md"), None
+    )
     if skill is None or skill.text is None:
         return _invalid(resources, "invalid_skill_text")
 
@@ -93,15 +96,16 @@ def extract_catalog(
         if type(value) is not str:
             return _invalid(resources, "invalid_relationship", skill.text, raw)
         targets = [target.strip() for target in value.split(",")]
-        if any(not target or not _NAME.fullmatch(target) or len(target) > 64 for target in targets):
+        if any(
+            not target or not _NAME.fullmatch(target) or len(target) > 64
+            for target in targets
+        ):
             return _invalid(resources, "invalid_relationship", skill.text, raw)
         line = evidence_lines.get(metadata_key)
         if line is None:
             return _invalid(resources, "invalid_relationship", skill.text, raw)
         for target in sorted(set(targets)):
-            relationships.append(
-                CatalogRelationship(kind, target, metadata_key, line)
-            )
+            relationships.append(CatalogRelationship(kind, target, metadata_key, line))
 
     relationships.sort(
         key=lambda item: (item.kind, item.target_name, item.metadata_key)
@@ -127,29 +131,49 @@ def query_tokens(query: str) -> tuple[str, ...]:
 
 
 def fts_query(tokens: tuple[str, ...]) -> str:
-    return " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
+    config = load_settings()["search"]
+    stopwords = {word.casefold() for word in config["stopwords"]}
+    selected = [token for token in tokens if token not in stopwords]
+    return (" " + config["operator"] + " ").join(
+        f'"{token.replace(chr(34), chr(34) * 2)}"' for token in selected
+    ) or '""'
+
+
+class DiscoveryEntries:
+    """Derived lookups over one immutable catalog observation."""
+
+    def __init__(self, entries: list[dict[str, object]]) -> None:
+        self.by_name: dict[str, list[dict[str, object]]] = {}
+        self.by_key: dict[tuple[str, str], dict[str, object]] = {}
+        self.by_artifact: dict[str, dict[str, object]] = {}
+        for entry in entries:
+            artifact = str(entry["artifact_id"])
+            self.by_artifact[artifact] = entry
+            self.by_key[(artifact, str(entry["content_digest"]))] = entry
+            self.by_name.setdefault(str(entry["name"]), []).append(entry)
 
 
 def build_discovery(
     query: str,
     tokens: tuple[str, ...],
     coverage: dict[str, dict[str, object]],
-    entries: list[dict[str, object]],
+    entries: list[dict[str, object]] | DiscoveryEntries,
     resources: list[dict[str, object]],
     matched_resources: set[tuple[str, str, str]],
     relationships: list[dict[str, object]],
     candidate_order: dict[str, int],
     semantic_scores: dict[str, float] | None = None,
     fusion_scores: dict[str, dict[str, int | float | None]] | None = None,
+    relevance_scores: dict[str, float] | None = None,
 ) -> dict[str, object]:
     semantic_scores = semantic_scores or {}
     fusion_scores = fusion_scores or {}
-    entries_by_name: dict[str, list[dict[str, object]]] = {}
-    entries_by_key: dict[tuple[str, str], dict[str, object]] = {}
-    for entry in entries:
-        key = (str(entry["artifact_id"]), str(entry["content_digest"]))
-        entries_by_key[key] = entry
-        entries_by_name.setdefault(str(entry["name"]), []).append(entry)
+    relevance_scores = relevance_scores or {}
+    lookup = (
+        entries if isinstance(entries, DiscoveryEntries) else DiscoveryEntries(entries)
+    )
+    entries_by_name = lookup.by_name
+    entries_by_key = lookup.by_key
     relationships_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
     for relationship in relationships:
         key = (
@@ -164,15 +188,18 @@ def build_discovery(
         resources_by_artifact.setdefault(key, []).append(resource)
 
     candidates: list[dict[str, object]] = []
-    for entry in entries:
-        artifact = str(entry["artifact_id"])
+    relevant = (
+        semantic_scores.keys()
+        | relevance_scores.keys()
+        | {item[0] for item in matched_resources}
+    )
+    for artifact in relevant:
+        entry = lookup.by_artifact.get(artifact)
+        if entry is None:
+            continue
         digest = str(entry["content_digest"])
         key = (artifact, digest)
         semantic_score = semantic_scores.get(artifact)
-        if semantic_score is None and not any(
-            item[:2] == key for item in matched_resources
-        ):
-            continue
         name = str(entry["name"])
         description = str(entry["description"])
         token_set = set(tokens)
@@ -213,7 +240,11 @@ def build_discovery(
                 excerpt, field = description, "description"
                 matched = [token for token in tokens if token in description_hits]
             else:
-                line, excerpt, field = 1, path[:240], "path"
+                line, excerpt, field = (
+                    1,
+                    path[: load_settings()["search"]["excerpt_chars"]],
+                    "path",
+                )
             matches.append(
                 {
                     "excerpt": excerpt,
@@ -230,7 +261,7 @@ def build_discovery(
             | resource_path_hits
             | resource_body_hits
         )
-        if not all_hits and semantic_score is None:
+        if not all_hits and semantic_score is None and artifact not in relevance_scores:
             continue
         if semantic_score is not None and not matches:
             skill_text = str(entry.get("skill_text", ""))
@@ -239,6 +270,18 @@ def build_discovery(
                     "excerpt": description,
                     "field": "semantic_projection",
                     "line": _frontmatter_key_line(skill_text, "description"),
+                    "matched_terms": [],
+                    "path": "SKILL.md",
+                }
+            )
+        if artifact in relevance_scores and not matches:
+            matches.append(
+                {
+                    "excerpt": description,
+                    "field": "ai_relevance",
+                    "line": _frontmatter_key_line(
+                        str(entry.get("skill_text", "")), "description"
+                    ),
                     "matched_terms": [],
                     "path": "SKILL.md",
                 }
@@ -254,6 +297,8 @@ def build_discovery(
         if semantic_score is not None:
             score["semantic_similarity"] = round(semantic_score, 9)
         score.update(fusion_scores.get(artifact, {}))
+        if artifact in relevance_scores:
+            score["ai_relevance"] = relevance_scores[artifact]
         candidates.append(
             {
                 "artifact_id": artifact,
@@ -459,8 +504,8 @@ def _word_set(value: str) -> set[str]:
 def _first_matching_line(text: str, terms: set[str]) -> tuple[int, str]:
     for line_number, line in enumerate(text.splitlines(), 1):
         if terms & _word_set(line):
-            return line_number, line[:240]
-    return 1, text[:240]
+            return line_number, line[: load_settings()["search"]["excerpt_chars"]]
+    return 1, text[: load_settings()["search"]["excerpt_chars"]]
 
 
 def _first_skill_body_matching_line(text: str, terms: set[str]) -> tuple[int, str]:
@@ -468,7 +513,7 @@ def _first_skill_body_matching_line(text: str, terms: set[str]) -> tuple[int, st
     end = next((index for index, line in enumerate(lines[1:], 1) if line == "---"), 0)
     for line_number, line in enumerate(lines[end + 1 :], end + 2):
         if terms & _word_set(line):
-            return line_number, line[:240]
+            return line_number, line[: load_settings()["search"]["excerpt_chars"]]
     return 1, ""
 
 
@@ -510,7 +555,11 @@ def _parse_frontmatter(
     if not lines or lines[0].rstrip("\r\n") != "---":
         return None
     end = next(
-        (index for index, line in enumerate(lines[1:], 1) if line.rstrip("\r\n") == "---"),
+        (
+            index
+            for index, line in enumerate(lines[1:], 1)
+            if line.rstrip("\r\n") == "---"
+        ),
         None,
     )
     if end is None:
@@ -533,7 +582,11 @@ def skill_markdown_body(text: str) -> str:
     if not lines or lines[0].rstrip("\r\n") != "---":
         return ""
     end = next(
-        (index for index, line in enumerate(lines[1:], 1) if line.rstrip("\r\n") == "---"),
+        (
+            index
+            for index, line in enumerate(lines[1:], 1)
+            if line.rstrip("\r\n") == "---"
+        ),
         None,
     )
     return "" if end is None else "".join(lines[end + 1 :])
@@ -542,7 +595,11 @@ def skill_markdown_body(text: str) -> str:
 def _frontmatter_key_line(text: str, wanted: str) -> int:
     lines = text.splitlines(keepends=True)
     end = next(
-        (index for index, line in enumerate(lines[1:], 1) if line.rstrip("\r\n") == "---"),
+        (
+            index
+            for index, line in enumerate(lines[1:], 1)
+            if line.rstrip("\r\n") == "---"
+        ),
         None,
     )
     if end is None:
