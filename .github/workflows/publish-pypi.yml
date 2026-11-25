@@ -1,0 +1,66 @@
+name: Publish to PyPI
+
+# Publishes the wheel and source archive that are attached to a GitHub release, after checking them against the release's own
+# SHA256SUMS. It does not build: PyPI receives the very files the release holds, so their hashes are the same on both.
+# It cannot run by accident:
+#   1. it starts only when a GitHub release is published (no push, pull request, schedule or manual trigger);
+#   2. its first job is skipped unless the repository variable PYPI_PUBLISH_ENABLED is "true", which stays unset until the PyPI
+#      account and the trusted publisher exist (docs: the steps page for the owner);
+#   3. the publish job uses the GitHub environment "pypi", which the owner sets to require a reviewer before it runs;
+#   4. on PyPI's side, nothing accepts this workflow until the owner registers it as a trusted publisher, so a run before that
+#      stops at PyPI's refusal without uploading anything.
+# No token or password is stored or used: PyPI trusts this workflow by its OIDC identity (the `id-token: write` permission, on the
+# publish job only).
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  fetch:
+    name: Fetch and check the release files
+    if: ${{ vars.PYPI_PUBLISH_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - name: Download the release's wheel, source archive and SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.whl' --pattern '*.tar.gz' --pattern 'SHA256SUMS' --dir dist
+      - name: Check the files (hashes, version, project name, registry line)
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: python3 tools/check_pypi_files.py dist "$TAG" io.github.Kayhusk/capalith
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pypi-files
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish to PyPI
+    needs: [fetch]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/capalith
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pypi-files
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

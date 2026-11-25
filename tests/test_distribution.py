@@ -28,7 +28,7 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(">=3.11", project["requires-python"])
         self.assertEqual("MIT", project["license"])
         self.assertEqual("PACKAGE.md", project["readme"])
-        self.assertIn("Private :: Do Not Upload", project["classifiers"])
+        self.assertNotIn("Private :: Do Not Upload", project["classifiers"])   # uploadable since the PyPI preparation: tests/test_pypi_ready.py
         self.assertEqual(
             {
                 "PyYAML==6.0.3",
