@@ -36,7 +36,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement through the repository's private report form: open the **Security** tab, choose **Report a vulnerability**, and say in the title that it is a conduct report. Only you and the maintainers can see it. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement through the repository's private report form: open the **Security and quality** tab, choose **Report a vulnerability**, and say in the title that it is a conduct report. It goes privately to the maintainers; it is not public. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

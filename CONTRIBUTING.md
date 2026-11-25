@@ -10,7 +10,7 @@ Thanks for looking. Capalith is a young project (alpha, Linux x86_64 with Python
 
 ## Set up
 
-You need Python 3.11 and SQLite with FTS5 (the standard Linux builds have it). From a clone of the repository:
+You need Python 3.11 and SQLite with FTS5. From a clone of the repository:
 
 ```bash
 python3.11 -m venv .venv
@@ -18,7 +18,7 @@ python3.11 -m venv .venv
 python -m pip install --require-hashes -r requirements.txt
 ```
 
-`requirements.txt` pins every dependency by hash. That is on purpose: install from it, not with a plain `pip install .`, when you work on the code.
+`requirements.txt` pins every dependency by hash and is the file CI installs from, so use it when you work on the code.
 
 The search model is only needed to try the program by hand, not to run the tests: `python -m capalith.semantic provision` downloads it once (see the README).
 
@@ -34,7 +34,7 @@ PYTHONWARNINGS=error python -m unittest discover -s tests -v
 
 ## What a change needs
 
-1. **A test** that fails without your change and passes with it, in `tests/`, in the style of the neighbouring tests (standard `unittest`, no new test framework).
+1. **A test** for any change in behaviour: it fails without your change and passes with it. Put it in `tests/`, in the style of the neighbouring tests (standard `unittest`, no new test framework). A pull request that only changes documentation needs no test; say so in the description.
 2. **The whole suite green** with the command above.
 3. **Docs and changelog** updated where behaviour changes (see above). Write for a person who has never seen the project; say what you measured and what you did not check.
 4. **One concern per pull request**, with a description that says what changed and why. Fill in the pull request template.
@@ -47,8 +47,8 @@ PYTHONWARNINGS=error python -m unittest discover -s tests -v
 
 ## What won't be accepted yet
 
-- **Support claims for another platform.** macOS, Windows and other Pythons run in CI so the results can be read, but nothing is listed as supported until its job passes. Fixes that move a job toward passing are welcome; changing the README's "supported" line is the maintainers' step.
-- **Network calls on the search path.** Indexing and the free search run locally. The one network use at runtime is the optional AI ranking, which is off unless the user turns it on.
+- **Support claims for another platform.** macOS, Windows (through WSL2) and newer Pythons run in CI so the results can be read, but nothing is listed as supported until its job passes. Fixes that move a job toward passing are welcome; changing the README's "supported" line is the maintainers' step.
+- **New network use.** Indexing and search of local folders run locally. The network is used only where the README says: the one-time model download (`capalith-model provision`), fetching a configured Git branch or tag for a Git source, and the optional AI ranking, which is off unless the user turns it on. A change that adds another use needs an issue first and is unlikely to be accepted.
 - **Changes that make Capalith install, activate or edit a host's skills.** Capalith finds and ranks skills and says where to read them; the host keeps control of loading. It reads the settings file and never writes it.
 
 ## Pull requests

@@ -9,6 +9,6 @@
 ## Checklist
 
 - [ ] `PYTHONWARNINGS=error python -m unittest discover -s tests -v` passes
-- [ ] A test fails without this change and passes with it
+- [ ] For a change in behaviour: a test fails without it and passes with it (documentation-only: say so here)
 - [ ] README, `docs/` and `CHANGELOG.md` updated where behaviour changes
 - [ ] No new dependency (or I opened an issue first)

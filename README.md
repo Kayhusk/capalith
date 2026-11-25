@@ -30,7 +30,7 @@ Supported: Linux on x86_64 with Python 3.11 and SQLite FTS5. Git is needed only 
 
 ### Full installation
 
-Linux on x86_64 with Python 3.11 (uv fetches it for you). Windows through WSL2 is expected to work as Linux but has not been tested yet; keep your skill folders and Capalith's files on the Linux side of WSL2. Plan for about 300 MB of disk, more if uv also downloads Python for you (about 30 MB more): on a test machine the program and its libraries took 236 MB and the default search model about 67 MB.
+Linux on x86_64 with Python 3.11 (uv fetches it for you). Windows through WSL2 is expected to work as Linux but has not been tested yet; keep your skill folders and Capalith's files on the Linux side of WSL2. Plan for about 300 MB of disk, plus about 100 MB if uv also installs Python for you: on a test machine the program and its libraries took 236 MB, the default search model about 67 MB, and uv's Python 3.11 about 96 MB (`du` of its folder on a clean home).
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you don't have it: `curl -LsSf https://astral.sh/uv/install.sh | sh` (it prints how to put uv on your PATH; open a new terminal afterwards, or run what it prints)
 2. Install Capalith from its release wheel:

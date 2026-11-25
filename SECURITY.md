@@ -4,7 +4,7 @@
 
 Please report it privately; don't open a public issue or pull request.
 
-Use GitHub's private reporting: open the repository's **Security** tab, choose **Report a vulnerability**, and fill in the form. Only you and the maintainers can see the report.
+Use GitHub's private reporting: open the repository's **Security and quality** tab, choose **Report a vulnerability**, and fill in the form. The report goes privately to the maintainers; it is not public.
 
 Include what you found, how to reproduce it, the Capalith version (`capalith --version`) and what an attacker could do with it. Please don't include real API keys or private skill contents.
 
@@ -12,7 +12,7 @@ Include what you found, how to reproduce it, the Capalith version (`capalith --v
 
 This is a small project run by a few people, so these are intentions and not guarantees:
 
-- we acknowledge a report within a few days;
+- we aim to acknowledge a report within a week;
 - we tell you whether we think it is a vulnerability and what we plan to do;
 - we credit you in the fix's release notes if you want that.
 
