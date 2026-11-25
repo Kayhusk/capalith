@@ -11,6 +11,7 @@ import io
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -197,6 +198,39 @@ class ErrorTests(unittest.TestCase):
     def load(self, root: Path):
         with patch.dict(os.environ, {"HOME": str(root), "XDG_CONFIG_HOME": str(root / "config")}, clear=True):
             return load_settings()
+
+    def start(self, root: Path, settings_text: str):
+        skills = root / "skills"
+        skills.mkdir()
+        (skills / "demo").mkdir()
+        (skills / "demo/SKILL.md").write_text("---\nname: demo\ndescription: Test skill.\n---\n", encoding="utf-8")
+        config = root / "capalith.toml"
+        config.write_text(settings_text)
+        config.chmod(0o600)
+        root.chmod(0o700)
+        return subprocess.run(
+            [sys.executable, "-m", "capalith.mcp_server", "--source", str(skills), "--config", str(config)],
+            input=b"", capture_output=True, cwd=PROJECT_ROOT, timeout=60,
+            env={**os.environ, "XDG_DATA_HOME": str(root / "data")},
+        )
+
+    def test_a_rejected_settings_key_stops_the_server_start_and_names_the_key(self):
+        for text, line in (("[nonsense]\nx = 1\n", b"settings_error: unknown key nonsense\n"),
+                           ("[search]\nbogus = 1\n", b"settings_error: unknown key search.bogus\n")):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as directory:
+                result = self.start(Path(directory).resolve(), text)
+                self.assertEqual(1, result.returncode)
+                self.assertEqual(line, result.stderr)
+                self.assertEqual(b"", result.stdout)
+
+    def test_a_setup_failure_that_is_not_the_settings_still_says_what_it_said_before(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            result = subprocess.run(
+                [sys.executable, "-m", "capalith.mcp_server", "--source", str(root / "missing")],
+                input=b"", capture_output=True, cwd=PROJECT_ROOT, timeout=60, env={**os.environ, "XDG_DATA_HOME": str(root / "data")})
+            self.assertEqual(1, result.returncode)
+            self.assertIn(b"catalog_setup_failed", result.stderr)
 
     def test_a_writable_folder_or_file_is_refused_and_the_error_says_which_path_and_the_one_chmod(self):
         with tempfile.TemporaryDirectory() as directory:

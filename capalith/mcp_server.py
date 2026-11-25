@@ -598,7 +598,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if managed:
             try:
                 database = prepare_catalog(arguments.source or (), arguments.git or ())
-            except StoreSchemaNewer as error:
+            except (StoreSchemaNewer, SettingsError) as error:
+                # Fixed texts that name no value: a newer catalog, or the rejected settings key (`settings_error: unknown key X`).
                 print(str(error), file=sys.stderr)
                 return 1
             except Exception:

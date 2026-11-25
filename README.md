@@ -223,7 +223,7 @@ Each server start refreshes this explicit selection. Git startup may fetch the c
 
 ### Count your own usage (off by default)
 
-To see how often your agents search, and how, turn on the local usage log in your settings file (`usage.enabled = true`). It writes one line per search on your own machine: the time, how many results, the status word, the duration and a random install id. It never writes the query, a skill's text, a path or an account, and nothing leaves your machine. `capalith usage` prints one line per day from it. Every setting, what a line holds and the measured cost are in [docs/settings.md](docs/settings.md#a-local-usage-log-off-by-default).
+To see how often your agents search, and how, turn on the local usage log in your settings file (`usage.enabled = true`). Turn it on only after every Capalith server that reads that settings file runs 0.2.2, and turn it off (remove the `[usage]` table) before you go back to 0.2.1: a 0.2.1 server does not know the table, so every search it answers, including one already running, fails with `settings_error: unknown key usage`, and a new one does not start. It writes one line per search on your own machine: the time, how many results, the status word, the duration and a random install id. It never writes the query, a skill's text, a path or an account, and nothing leaves your machine. `capalith usage` prints one line per day from it. Every setting, what a line holds and the measured cost are in [docs/settings.md](docs/settings.md#a-local-usage-log-off-by-default).
 
 ### Bundled guidance
 
