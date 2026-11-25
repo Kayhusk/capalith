@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/capalith-mark.svg" alt="Capalith logo" width="240">
+  <img src="assets/capalith-mark.svg" alt="Capalith logo" width="120">
 </p>
 
 # Capalith
@@ -8,7 +8,13 @@
 
 It is for people who use Claude Code, Codex or another MCP client and keep a folder of skills. Alpha software; Linux x86_64 with Python 3.11 is the supported platform.
 
-Install: `uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.1/capalith-0.2.1-py3-none-any.whl`, then `capalith-model provision`, then connect your agent. The [full steps](#full-installation) say what each one does.
+Install:
+
+```bash
+uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.2/capalith-0.2.2-py3-none-any.whl
+```
+
+Then run `capalith-model provision` and connect your agent. The [full steps](#full-installation) say what each one does.
 
 Capalith is a local-first catalog for portable agent skills. It indexes each skill with its supporting files from local directories or Git branches and tags. Search returns ranked matches, declared relationships, and the IDs a host needs to read a selected skill.
 
@@ -26,17 +32,17 @@ Capalith provides:
 
 Connect Capalith, then ask your agent to find a skill for a task. The server starts without a catalog or source arguments. The first search discovers supported skill directories, prepares the local catalog, and returns matches. No readiness call, database path, source IDs, separate scan command, or companion-guide installation is required. Capalith provides navigation; the agent decides when to use it and the host retains control of skill loading.
 
-Supported: Linux on x86_64 with Python 3.11 and SQLite FTS5. Git is needed only for Git sources. Releases are distributed through GitHub, not a package registry. The latest release is [0.2.1](https://github.com/Kayhusk/capalith/releases/tag/v0.2.1), a public pre-release, and its README is at that tag; earlier releases are on the [releases page](https://github.com/Kayhusk/capalith/releases), and 0.1.4, 0.1.5 and 0.2.0 were never published (the [changelog](CHANGELOG.md) includes them in 0.2.1).
+Supported: Linux on x86_64 with Python 3.11 and SQLite FTS5. Git is needed only for Git sources. Releases are distributed through GitHub, not a package registry. The latest release is [0.2.2](https://github.com/Kayhusk/capalith/releases/tag/v0.2.2), a public pre-release, and its README is at that tag; earlier releases are on the [releases page](https://github.com/Kayhusk/capalith/releases), and 0.1.4, 0.1.5 and 0.2.0 were never published (the [changelog](CHANGELOG.md) includes them in 0.2.1).
 
 ### Full installation
 
-Linux on x86_64 with Python 3.11 (uv fetches it for you). Windows through WSL2 is expected to work as Linux but has not been tested yet; keep your skill folders and Capalith's files on the Linux side of WSL2. Plan for about 300 MB of disk, plus about 100 MB if uv also installs Python for you: on a test machine the program and its libraries took 236 MB, the default search model about 67 MB, and uv's Python 3.11 about 96 MB (`du` of its folder on a clean home).
+Linux on x86_64 with Python 3.11 (uv fetches it for you). The test suite passes in CI on WSL2; a real Windows host is untested and unsupported. If you use WSL2, keep your skill folders and Capalith's files on the Linux side of WSL2. Plan for about 300 MB of disk, plus about 100 MB if uv also installs Python for you: on a test machine the program and its libraries took 236 MB, the default search model about 67 MB, and uv's Python 3.11 about 96 MB (`du` of its folder on a clean home).
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you don't have it: `curl -LsSf https://astral.sh/uv/install.sh | sh` (it prints how to put uv on your PATH; open a new terminal afterwards, or run what it prints)
 2. Install Capalith from its release wheel:
 
    ```bash
-   uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.1/capalith-0.2.1-py3-none-any.whl
+   uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.2/capalith-0.2.2-py3-none-any.whl
    ```
 
    To install a checkout of this repository instead (for example to try a change of your own), run `uv tool install --python 3.11 .` in it.
@@ -115,8 +121,8 @@ The first word says how far to trust the answer. A result marked `possible` or `
 
 - `exact`: the skill's name is what you asked for.
 - `good`: something judged the answer: AI ranking chose it, or you set `answer.good_from` (off by default; see [settings](docs/settings.md)).
-- `possible`: a word of your task is in the skill's name or description, and nothing confirms it. On the free search this is the normal first answer: read the summary, then use the skill if it fits.
-- `weak`: no word of yours is in the name or description; only the meaning, or only the skill's body, relates. Read the summary, and carry on without a skill if it does not fit.
+- `possible`: a word of your task is in the skill's name or description, and nothing confirms it. A common word such as "a" or "the" in the description does not count (a word in the name always does; the list is `answer.hide_words`, see [settings](docs/settings.md)). On the free search this is the normal first answer: read the summary, then use the skill if it fits.
+- `weak`: no word of yours, other than common ones, is in the name or description; only the meaning, or only the skill's body, relates, and the line says which. Read the summary, and carry on without a skill if it does not fit.
 - `close`: the first two results score nearly the same by meaning and no word of yours is in the first one's name or description. It does not say that either fits: read both summaries and pick one, or carry on without a skill.
 - `no_match`: nothing matched; or you turned refusal on (see [settings](docs/settings.md)) and the best meaning score is below the number you set; or AI ranking is on and the AI says none of the skills it was shown fits (when it was shown only the nearest skills, the text says "None of the N nearest skills fits this task"). Carry on without a skill. With refusal off, the free search does not judge whether a non-empty list fits: it says `no_match` only when nothing matched.
 
@@ -226,6 +232,10 @@ capalith-mcp --git https://example.com/skills.git refs/heads/main
 These optional modes index only the supplied sources at startup and then keep the catalog read-only. `discover` can maintain its separate ranking cache and is marked writing and non-destructive; the other query tools remain read-only. Repeat `--source` or `--git` to select more sources. Local sources take priority over Git sources; within each group, the first listed source wins a name collision.
 
 Each server start refreshes this explicit selection. Git startup may fetch the configured ref; local startup needs no network. Restart these connections to pick up later source changes. If startup fails, the server exits rather than serving a stale catalog. Use `--db` below for manual source lifecycle control.
+
+### Count your own usage (off by default)
+
+To see how often your agents search, and how, turn on the local usage log in your settings file (`usage.enabled = true`). Turn it on only after every Capalith server that reads that settings file runs 0.2.2, and turn it off (remove the `[usage]` table) before you go back to 0.2.1: a 0.2.1 server does not know the table, so every search it answers, including one already running, fails with `settings_error: unknown key usage`; a new one started with `--source` does not start, and one with automatic source discovery starts but fails every call the same way. It writes one line per search on your own machine: the time, how many results, the status word, the duration and a random install id. It never writes the query, a skill's text, a path or an account, and nothing leaves your machine. `capalith usage` prints one line per day from it. Every setting, what a line holds and the measured cost are in [docs/settings.md](docs/settings.md#a-local-usage-log-off-by-default).
 
 ### Bundled guidance
 

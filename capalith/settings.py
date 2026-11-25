@@ -186,7 +186,7 @@ def _merge(target: dict, supplied: dict, prefix: str = "") -> None:
             target[key] = value
             continue
         if key not in target:
-            raise SettingsError(f"settings_error: unknown key {address}")
+            raise SettingsError(f"settings_error: unknown key {visible(address)}")
         current = target[key]
         if address == "semantic.model.files":
             if type(value) is not dict or not value:
@@ -300,6 +300,11 @@ def _validate(config: dict) -> None:
     storage = config["storage"]
     if storage["data_dir"]:
         checked_folder(storage["data_dir"], "storage.data_dir")
+    usage = config["usage"]
+    if usage["dir"]:
+        checked_folder(usage["dir"], "usage.dir")
+    if not 1 <= usage["retention_days"] <= 3650:
+        raise SettingsError("settings_error: usage.retention_days must be from 1 to 3650")
     if "cache_dir" in config["ranking"]:
         checked_folder(config["ranking"]["cache_dir"], "ranking.cache_dir")
     # SQLite's busy handler accepts milliseconds in a signed 32-bit integer.
@@ -354,6 +359,11 @@ def _validate_answer(answer: dict) -> None:
             raise SettingsError(f"settings_error: answer.{key} outside range")
     if any(type(word) is not str or not re.fullmatch(r"\w+", word) for word in answer["hide_words"]):
         raise SettingsError("settings_error: answer.hide_words must contain words")
+    for key, text in answer["signals"].items():
+        if type(text) is not str or not text:
+            raise SettingsError(f"settings_error: answer.signals.{key} must be text")
+        if "{" in text or "}" in text:   # a signal is a plain sentence: no placeholder, no braces
+            raise SettingsError(f"settings_error: invalid answer.signals.{key}")
     for key, text in answer["messages"].items():
         if type(text) is not str or not text:
             raise SettingsError(f"settings_error: answer.messages.{key} must be text")

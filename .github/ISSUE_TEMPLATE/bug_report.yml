@@ -25,7 +25,7 @@ body:
     attributes:
       label: Capalith version
       description: Output of `capalith --version`
-      placeholder: capalith 0.2.1
+      placeholder: capalith 0.2.2
     validations:
       required: true
   - type: input

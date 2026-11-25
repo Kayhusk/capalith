@@ -23,7 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG = defaults()["answer"]
 
 
-def candidate(name, *, description="Does a thing.", words=("task",), similarity=None, name_hits=0,
+def candidate(name, *, description="Does a task.", words=("task",), similarity=None, name_hits=0,
               description_hits=1, source="s1", bundle=None, relationships=()):
     score = {"name": name_hits, "description": description_hits, "distinct_terms": len(words)}
     if similarity is not None:

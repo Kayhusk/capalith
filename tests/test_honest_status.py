@@ -11,6 +11,7 @@ import io
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,9 @@ import anyio
 from mcp import ClientSession, StdioServerParameters, stdio_client
 
 from capalith import answer, mcp_server, semantic
-from capalith.settings import SettingsError, _validate_answer, defaults, load_settings
+from capalith.onboarding import prepare_catalog
+from capalith.settings import SettingsError, _merge, _validate_answer, defaults, load_settings
+from capalith.store import Store
 from tests.test_answer import CONFIG, FakeStore, candidate, result, skill
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +70,33 @@ class StatusTests(unittest.TestCase):
             with self.assertRaises(SettingsError, msg=repr(bad)):
                 _validate_answer(config)
 
+    def test_a_common_word_in_a_description_is_not_a_possible_match(self):
+        # Outsider run of 0.2.1: "book a dentist appointment" against a violin and a tide skill answered possible, on "a".
+        violin = candidate("violin-tuning", description="Tune a violin by ear.", words=("a",), description_hits=1)
+        record = result([violin], query="book a dentist appointment")
+        self.assertNotEqual("possible", answer.judge(record, CONFIG)[0])
+        self.assertNotEqual("good", answer.judge(record, CONFIG)[0])
+        self.assertFalse(self.shaped_text(record).startswith("possible"))
+
+    def test_a_distinctive_description_word_alongside_a_common_one_is_still_possible(self):
+        booking = candidate("booking", description="Book a dentist appointment.", words=("book", "a", "dentist"), description_hits=3)
+        self.assertEqual("possible", answer.judge(result([booking], query="book a dentist appointment"), CONFIG)[0])
+
+    def test_a_skill_named_with_a_common_word_is_still_found_and_possible(self):
+        named = candidate("how-to-commit", description="Writes commits.", words=("how",), name_hits=1, description_hits=0)
+        self.assertEqual("possible", answer.judge(result([named], query="how is it done"), CONFIG)[0])
+        bare = candidate("why", description="Explains reasons.", words=("why",), name_hits=1, description_hits=0)
+        self.assertEqual("possible", answer.judge(result([bare], query="why did the build fail"), CONFIG)[0])
+
+    def test_the_common_words_are_the_settings_list_and_an_empty_list_restores_the_old_rule(self):
+        self.assertIn("a", defaults()["answer"]["hide_words"])
+        violin = candidate("violin-tuning", description="Tune a violin by ear.", words=("a",), description_hits=1)
+        record = result([violin], query="book a dentist appointment")
+        self.assertEqual("possible", answer.judge(record, {**CONFIG, "hide_words": []})[0])
+
+    def shaped_text(self, record):
+        return answer.shape(FakeStore([]), record, "short")["_text"]
+
 
 class WordsTests(unittest.TestCase):
     def shaped(self, candidates, **kwargs):
@@ -85,6 +115,51 @@ class WordsTests(unittest.TestCase):
         self.assertTrue(nothing["_text"].endswith("Carry on without one."), nothing["_text"])
         self.assertEqual("nothing matched", nothing["signal"])  # the structured record keeps the rule's words for maintainers
         self.assertFalse(any("nearest in the structured" in line for line in nothing["_text"].splitlines()))
+
+    def test_the_weak_line_never_contradicts_its_tag(self):
+        # a word found only in the body: the first line used to say "no word of yours is in its name or description"
+        body = self.shaped([candidate("pdf-filler", similarity=0.8, words=("task",), name_hits=0, description_hits=0)])
+        first = body["_text"].splitlines()[0]
+        self.assertEqual("weak", body["status"])
+        self.assertEqual("matched by meaning and your words 'task'", body["candidates"][0]["why"])
+        self.assertNotIn("no word of yours", first)
+        self.assertIn("only in its body or file names", first)
+        # only a common word shared: the line says so, and the tag shows no word
+        common = self.shaped([candidate("violin-tuning", similarity=0.8, words=("a",), name_hits=0, description_hits=1)], query="book a dentist appointment")
+        self.assertEqual("weak", common["status"])
+        self.assertEqual("matched by meaning", common["candidates"][0]["why"])
+        self.assertIn("common", common["_text"].splitlines()[0])
+        # nothing shared: close in meaning only
+        none = self.shaped([candidate("pdf-filler", similarity=0.8, words=(), name_hits=0, description_hits=0)])
+        self.assertIn("none of your words", none["_text"].splitlines()[0])
+
+    def test_a_word_found_only_in_a_resource_file_name_is_not_called_a_body_word(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory).resolve()
+            bundle = temp / "skills/neutral-skill"
+            (bundle / "references").mkdir(parents=True)
+            (bundle / "SKILL.md").write_text("---\nname: neutral-skill\ndescription: Handles plain things.\n---\n\n# Plain\n\nNothing special here.\n", encoding="utf-8")
+            (bundle / "references/saffron.txt").write_text("plain notes\n", encoding="utf-8")
+            with patch.dict(os.environ, {"XDG_DATA_HOME": str(temp / "data")}):
+                store = Store(prepare_catalog([temp / "skills"]), read_only=True)
+                shaped = answer.shape(store, store.discover("saffron"), "short")
+            first = shaped["_text"].splitlines()[0]
+            self.assertEqual("weak", shaped["status"])
+            self.assertIn("file names", first)
+            self.assertNotIn("only the skill's body mentions", first)
+
+    def test_the_weak_wording_is_a_setting_with_a_shipped_default_and_is_checked(self):
+        signals = defaults()["answer"]["signals"]
+        self.assertEqual({"weak_meaning_body", "weak_meaning_common", "weak_meaning", "weak_body", "weak_common"}, set(signals))
+        config = copy.deepcopy(CONFIG)
+        config["signals"]["weak_body"] = "custom wording"
+        record = result([candidate("pdf-filler", name_hits=0, description_hits=0)])
+        self.assertEqual("custom wording", answer.judge(record, config)[1])
+        for bad in ("", "{missing}", "{signal.x}", 3):
+            config = copy.deepcopy(CONFIG)
+            config["signals"]["weak_body"] = bad
+            with self.assertRaises(SettingsError, msg=repr(bad)):
+                _validate_answer(config)
 
     def test_a_refused_search_is_one_line_for_the_agent_and_keeps_the_near_misses_in_the_record(self):
         record = result([candidate("pdf-filler"), candidate("other-skill")])
@@ -140,6 +215,49 @@ class ErrorTests(unittest.TestCase):
     def load(self, root: Path):
         with patch.dict(os.environ, {"HOME": str(root), "XDG_CONFIG_HOME": str(root / "config")}, clear=True):
             return load_settings()
+
+    def start(self, root: Path, settings_text: str):
+        skills = root / "skills"
+        skills.mkdir()
+        (skills / "demo").mkdir()
+        (skills / "demo/SKILL.md").write_text("---\nname: demo\ndescription: Test skill.\n---\n", encoding="utf-8")
+        config = root / "capalith.toml"
+        config.write_text(settings_text)
+        config.chmod(0o600)
+        root.chmod(0o700)
+        return subprocess.run(
+            [sys.executable, "-m", "capalith.mcp_server", "--source", str(skills), "--config", str(config)],
+            input=b"", capture_output=True, cwd=PROJECT_ROOT, timeout=60,
+            env={**os.environ, "XDG_DATA_HOME": str(root / "data")},
+        )
+
+    def test_a_rejected_settings_key_stops_the_server_start_and_names_the_key(self):
+        for text, line in (("[nonsense]\nx = 1\n", b"settings_error: unknown key nonsense\n"),
+                           ("[search]\nbogus = 1\n", b"settings_error: unknown key search.bogus\n")):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as directory:
+                result = self.start(Path(directory).resolve(), text)
+                self.assertEqual(1, result.returncode)
+                self.assertEqual(line, result.stderr)
+                self.assertEqual(b"", result.stdout)
+
+    def test_a_rejected_key_with_a_control_character_is_shown_escaped_on_one_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.start(Path(directory).resolve(), '"bogus\\nFORGED" = "SYNTHETIC_VALUE"\n')
+            self.assertEqual(1, result.returncode)
+            self.assertEqual(b"settings_error: unknown key bogus\\x0aFORGED\n", result.stderr)
+            self.assertNotIn(b"SYNTHETIC_VALUE", result.stderr)
+        with self.assertRaises(SettingsError) as raised:   # the same text a running server's call gets
+            _merge({"known": 1}, {"bad\u202ekey\n": 1})
+        self.assertEqual("settings_error: unknown key bad\\u202ekey\\x0a", str(raised.exception))
+
+    def test_a_setup_failure_that_is_not_the_settings_still_says_what_it_said_before(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            result = subprocess.run(
+                [sys.executable, "-m", "capalith.mcp_server", "--source", str(root / "missing")],
+                input=b"", capture_output=True, cwd=PROJECT_ROOT, timeout=60, env={**os.environ, "XDG_DATA_HOME": str(root / "data")})
+            self.assertEqual(1, result.returncode)
+            self.assertIn(b"catalog_setup_failed", result.stderr)
 
     def test_a_writable_folder_or_file_is_refused_and_the_error_says_which_path_and_the_one_chmod(self):
         with tempfile.TemporaryDirectory() as directory:

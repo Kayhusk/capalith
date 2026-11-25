@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -22,7 +23,7 @@ from pydantic import ValidationError
 
 from capalith import __version__
 from capalith.catalog import CatalogError
-from capalith import answer
+from capalith import answer, usage
 from capalith.cli import _configuration_report
 from capalith.onboarding import discover_sources, prepare_catalog
 from capalith.store import Store, StoreError, StoreSchemaNewer
@@ -299,7 +300,11 @@ def _store_call(database: Path, name: str, arguments: dict[str, Any]) -> dict[st
         if (detail or settings["answer"]["detail"]) == "short" and "limit" not in values:
             # The short answer is a short page; an explicit limit and the full record keep today's default.
             values["limit"] = min(settings["answer"]["default_limit"], settings["search"]["default_limit"])
-        return answer.shape(store, store.discover(**values), detail, values.get("source_ids"))
+        started = time.perf_counter()
+        result = store.discover(**values)
+        shaped = answer.shape(store, result, detail, values.get("source_ids"))
+        usage.record_search("discover", started, result)
+        return shaped
     if name == "inspect":
         return store.get_artifact(**values)
     return store.traverse(**values)
@@ -496,7 +501,12 @@ def create_server(
     ) -> types.CallToolResult:
         try:
             with settings_snapshot():
-                return await perform_call(_context, params)
+                started = time.perf_counter()
+                outcome = await perform_call(_context, params)
+                if params.name == "discover" and outcome.is_error:
+                    text = outcome.content[0].text if outcome.content and hasattr(outcome.content[0], "text") else ""
+                    usage.record_search("discover", started, error=text.partition(":")[0])
+                return outcome
         except SettingsError as error:
             return _failure(str(error))
 
@@ -588,7 +598,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if managed:
             try:
                 database = prepare_catalog(arguments.source or (), arguments.git or ())
-            except StoreSchemaNewer as error:
+            except (StoreSchemaNewer, SettingsError) as error:
+                # Fixed texts that name no value: a newer catalog, or the rejected settings key (`settings_error: unknown key X`).
                 print(str(error), file=sys.stderr)
                 return 1
             except Exception:

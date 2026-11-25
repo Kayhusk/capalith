@@ -5,15 +5,16 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence, TextIO
 
-from capalith import __version__
+from capalith import __version__, usage
 from capalith.catalog import CatalogError
 from capalith.identity import BundleEntryError
 from capalith.intake import review_git_source, scan_git_source, scan_local_source
-from capalith.store import Source, Store, StoreError
+from capalith.store import Source, Store, StoreError, StoreSchemaNewer
 from capalith.settings import SettingsError, load_settings
 
 
@@ -81,7 +82,7 @@ def _configuration_report(database: Path | None) -> dict[str, object]:
         if database is not None and database.is_file()
         else []
     )
-    return {
+    report: dict[str, object] = {
         "schema_version": 1,
         "sources": sources,
         "automatic_behavior": {
@@ -121,6 +122,9 @@ def _configuration_report(database: Path | None) -> dict[str, object]:
             ],
         },
     }
+    if usage.enabled():   # shown only when the owner turned the log on; the one counter of swallowed write failures
+        report["usage"] = {"enabled": True, "write_failures": usage.failures()}
+    return report
 
 
 def _set_source_status(
@@ -144,12 +148,44 @@ def _review(database: Path, source_id: str) -> dict[str, object]:
     return asdict(review_git_source(Store(database, read_only=True), source_id))
 
 
+def _usage_command(argv: Sequence[str], stdout: TextIO, stderr: TextIO) -> int:
+    """`capalith usage [--json] [--config PATH]`: the daily counts from the local usage log, and nothing else."""
+    parser = argparse.ArgumentParser(prog="capalith usage", description="Daily counts from the local usage log (usage.* settings).")
+    parser.add_argument("--json", action="store_true", help="print the days as JSON")
+    parser.add_argument("--config", metavar="PATH", help="absolute user settings file")
+    arguments = parser.parse_args(list(argv))
+    old_config = os.environ.get("CAPALITH_CONFIG")
+    if arguments.config:
+        os.environ["CAPALITH_CONFIG"] = arguments.config
+    try:
+        load_settings()
+        summary = usage.summarize()
+    except SettingsError as error:
+        print(str(error), file=stderr)
+        return 2
+    except (OSError, ValueError) as error:
+        print("usage log unreadable: " + "\n".join(str(error).splitlines()), file=stderr)
+        return 1
+    finally:
+        if arguments.config:
+            if old_config is None:
+                os.environ.pop("CAPALITH_CONFIG", None)
+            else:
+                os.environ["CAPALITH_CONFIG"] = old_config
+    stdout.write((json.dumps(summary, sort_keys=True, separators=(",", ":")) if arguments.json else usage.render(summary)) + "\n")
+    return 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
 ) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if list(argv)[:1] == ["usage"]:
+        return _usage_command(list(argv)[1:], stdout, stderr)
     parser = argparse.ArgumentParser(
         prog="capalith",
         description="Catalog and search portable Agent Skills.",
@@ -167,6 +203,7 @@ def main(
   discover QUERY...
   traverse ARTIFACT_ID CONTENT_DIGEST
   config show
+  usage [--json]          (no --db: the daily counts from the local usage log)
 
 REF must be refs/heads/NAME or refs/tags/NAME.""",
     )
@@ -208,6 +245,7 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
     arguments = parser.parse_args(argv)
 
     old_config = os.environ.get("CAPALITH_CONFIG")
+    search_started: float | None = None   # set when a discover starts: a failure after it is a counted search too
     if arguments.config:
         os.environ["CAPALITH_CONFIG"] = arguments.config
     try:
@@ -249,6 +287,7 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
         elif arguments.command == "artifact" and command_arguments == ["list"]:
             value = _existing_store(database).list_artifacts()
         elif arguments.command == "discover":
+            search_started = time.perf_counter()
             if not command_arguments:
                 raise CatalogError("discovery query must contain a word")
             value = _existing_store(database).discover(
@@ -262,6 +301,7 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
                 offset=arguments.offset,
                 view_id=arguments.view_id,
             )
+            usage.record_search("cli", search_started, value)
         elif arguments.command == "traverse" and len(command_arguments) == 2:
             value = _existing_store(database).traverse(
                 command_arguments[0],
@@ -298,9 +338,15 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
         print(str(error), file=stderr)
         return 2
     except sqlite3.Error:
+        if search_started is not None:
+            usage.record_search("cli", search_started, error="database_unavailable")
         print("database operation failed", file=stderr)
         return 1
     except (BundleEntryError, CatalogError, StoreError, OSError) as error:
+        if search_started is not None:   # the same codes the MCP server gives for the same failures
+            usage.record_search("cli", search_started, error=(
+                "catalog_newer" if isinstance(error, StoreSchemaNewer) else
+                "invalid_request" if isinstance(error, CatalogError) else "database_unavailable"))
         print("\\n".join(str(error).splitlines()), file=stderr)
         return 1
     finally:

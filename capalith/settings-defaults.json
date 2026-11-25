@@ -196,9 +196,22 @@
       "no_match": "No skill in the catalog fits this task. Nearest by wording (probably not what you need): {nearest}. Carry on without one.",
     "no_match_nearest": "None of the {sent} nearest skills fits this task. Carry on without one."
     },
+    "signals": {
+      "weak_meaning_body": "it is close in meaning, and your words are only in its body or file names, not in its name or description",
+      "weak_meaning_common": "it is close in meaning; the only words you share with it are common ones",
+      "weak_meaning": "it is close in meaning; none of your words is in it",
+      "weak_body": "only the skill's body or file names mention your words",
+      "weak_common": "the only words you share with it are common ones"
+    },
     "max_chars": 1200,
     "refuse_below": 0.0,
     "good_from": 0.0
+  },
+  "usage": {
+    "enabled": false,
+    "dir": "",
+    "retention_days": 30,
+    "skill_names": false
   },
   "compatibility": {
     "semantic_fingerprint": "af7a975567f4b15ba4806df15130c51ede1f3c7be5f76a5c4045da6efb237ec2",
