@@ -121,7 +121,7 @@ def run(reps: int, parallel: int, jitter_ms: float) -> None:
     for row in failed:
         diag = [line for line in row["stderr"].splitlines() if line.startswith("DIAG ")]
         kinds[diag[0][5:] if diag else "no DIAG line: " + row["stderr"][-120:].replace("\n", " | ")] += 1
-    for kind, count in kinds.most_common(8):
+    for kind, count in kinds.most_common():          # every kind: a cut list hid 3 of the 20 failures once
         print(f"  {count} x {kind}", flush=True)
     for row in failed[:3]:
         print("  sample", json.dumps({k: row[k] for k in ("pair", "child", "code")}), row["stderr"][-600:].replace("\n", " | "), flush=True)
