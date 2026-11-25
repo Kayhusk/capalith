@@ -42,4 +42,5 @@ The host operator can retain an existing trusted Python `module:function` callab
 
 AI search sends skill names as well as descriptions and shortlisted instruction excerpts; source paths, catalog IDs and supporting resource files stay local. No background provider calls or automatic prompt hints are installed. Results identify the `ai` or `free` path and fallback reason; an AI abstention returns no matches or recommendations. The private view cache includes raw queries, expires views after the policy's one-hour age limit, and securely deletes expired rows on the next access. An idle cache file persists until then. A failed cache write after a paid response can cause a later new search to pay again; no automatic paid retry occurs.
 
+<!-- Prepared for the MCP registry, not registered: the registry would start `uvx capalith`, the JSON command-line tool, not the server. -->
 <!-- mcp-name: io.github.Kayhusk/capalith -->

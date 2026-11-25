@@ -4,13 +4,13 @@ name: Publish to PyPI
 # SHA256SUMS. It does not build: PyPI receives the very files the release holds, so their hashes are the same on both.
 # It cannot run by accident:
 #   1. it starts only when a GitHub release is published (no push, pull request, schedule or manual trigger);
-#   2. its first job is skipped unless the repository variable PYPI_PUBLISH_ENABLED is "true", which stays unset until the PyPI
-#      account and the trusted publisher exist (docs: the steps page for the owner);
+#   2. its first job is skipped unless the repository variable PYPI_PUBLISH_ENABLED is "true"; the maintainers set it only after
+#      the PyPI account, the trusted publisher and the environment exist (the owner's steps; this workflow does not check them);
 #   3. the publish job uses the GitHub environment "pypi", which the owner sets to require a reviewer before it runs;
 #   4. on PyPI's side, nothing accepts this workflow until the owner registers it as a trusted publisher, so a run before that
 #      stops at PyPI's refusal without uploading anything.
-# No token or password is stored or used: PyPI trusts this workflow by its OIDC identity (the `id-token: write` permission, on the
-# publish job only).
+# No long-lived PyPI token or password is stored by hand: the download uses the run's GH_TOKEN, and PyPI trusts this workflow by
+# its OIDC identity (the `id-token: write` permission, on the publish job only) and gives it a short-lived token for the upload.
 on:
   release:
     types: [published]

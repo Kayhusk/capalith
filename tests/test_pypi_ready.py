@@ -1,8 +1,8 @@
 """Everything for PyPI and the MCP registry except Eddy's account: metadata, description, server.json, the publish workflow, the file check.
 
-Nothing here uploads or signs in. What the tests pin is the part that cannot be undone once published: a version number goes to
-PyPI once, the `mcp-name` line in the description is immutable per version, and the workflow must not be able to run before
-the account and the publisher exist.
+Nothing here uploads or signs in. What the tests pin is the part that cannot be undone once published: a filename goes to
+PyPI once, the `mcp-name` line in the description is immutable per version, and the workflow stays disabled until the
+maintainers set its repository variable, after the account and the publisher exist.
 """
 from __future__ import annotations
 
