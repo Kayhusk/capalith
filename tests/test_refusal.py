@@ -23,7 +23,7 @@ def candidate(name, *, similarity=0.9, description_hits=1):
     if similarity is not None:
         score["semantic_similarity"] = similarity
     return {
-        "name": name, "description": "Does a thing.", "matched_terms": ["task"], "score": score,
+        "name": name, "description": "Does a task.", "matched_terms": ["task"], "score": score,
         "source_id": "s1", "bundle_path": name, "artifact_id": "art_" + name,
         "content_digest": "sha256:" + "0" * 64, "relationships": [],
     }

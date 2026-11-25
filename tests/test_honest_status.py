@@ -67,6 +67,33 @@ class StatusTests(unittest.TestCase):
             with self.assertRaises(SettingsError, msg=repr(bad)):
                 _validate_answer(config)
 
+    def test_a_common_word_in_a_description_is_not_a_possible_match(self):
+        # Outsider run of 0.2.1: "book a dentist appointment" against a violin and a tide skill answered possible, on "a".
+        violin = candidate("violin-tuning", description="Tune a violin by ear.", words=("a",), description_hits=1)
+        record = result([violin], query="book a dentist appointment")
+        self.assertNotEqual("possible", answer.judge(record, CONFIG)[0])
+        self.assertNotEqual("good", answer.judge(record, CONFIG)[0])
+        self.assertFalse(self.shaped_text(record).startswith("possible"))
+
+    def test_a_distinctive_description_word_alongside_a_common_one_is_still_possible(self):
+        booking = candidate("booking", description="Book a dentist appointment.", words=("book", "a", "dentist"), description_hits=3)
+        self.assertEqual("possible", answer.judge(result([booking], query="book a dentist appointment"), CONFIG)[0])
+
+    def test_a_skill_named_with_a_common_word_is_still_found_and_possible(self):
+        named = candidate("how-to-commit", description="Writes commits.", words=("how",), name_hits=1, description_hits=0)
+        self.assertEqual("possible", answer.judge(result([named], query="how is it done"), CONFIG)[0])
+        bare = candidate("why", description="Explains reasons.", words=("why",), name_hits=1, description_hits=0)
+        self.assertEqual("possible", answer.judge(result([bare], query="why did the build fail"), CONFIG)[0])
+
+    def test_the_common_words_are_the_settings_list_and_an_empty_list_restores_the_old_rule(self):
+        self.assertIn("a", defaults()["answer"]["hide_words"])
+        violin = candidate("violin-tuning", description="Tune a violin by ear.", words=("a",), description_hits=1)
+        record = result([violin], query="book a dentist appointment")
+        self.assertEqual("possible", answer.judge(record, {**CONFIG, "hide_words": []})[0])
+
+    def shaped_text(self, record):
+        return answer.shape(FakeStore([]), record, "short")["_text"]
+
 
 class WordsTests(unittest.TestCase):
     def shaped(self, candidates, **kwargs):

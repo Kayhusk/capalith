@@ -39,7 +39,7 @@ def judge(result: dict[str, Any], config: dict[str, Any]) -> tuple[str, str]:
     Order: an empty result, an exact name, an accepted AI result, then the local `answer.refuse_below` gate.
     `good` is shown only where something judged the result: the AI ranking chose it, or the user set
     `answer.good_from` and the meaning score is at or above it and a query word is in the name or
-    description. On the free search alone, a word in the name or description is `possible`: on the
+    description (a common word in the description does not count: `answer.hide_words`). On the free search alone, that is `possible`: on the
     development sets today's "good" was on a wrong first result or a no-answer task as often as on a
     right one. `weak` is for a first result with no such word (only its meaning, or only its instructions
     text, relates); `close` is that case with a near tie; `no_match` is an empty result or a best meaning
@@ -59,7 +59,12 @@ def judge(result: dict[str, Any], config: dict[str, Any]) -> tuple[str, str]:
         return "no_match", f"best meaning score {best:.3f} is below answer.refuse_below {config['refuse_below']:g}"
     score = top["score"]
     similarity = score.get("semantic_similarity")
-    if score.get("name") or score.get("description"):
+    hide = {word.casefold() for word in config["hide_words"]}
+    # A word in the name always counts; a word in the description counts unless it is one of the common words
+    # (`answer.hide_words`): "a" in "Tune a violin" says nothing about a task that merely contains "a".
+    description_words = set(_words(str(top.get("description", ""))))
+    distinctive = bool(score.get("description")) and any(t in description_words and t not in hide for t in tokens)
+    if score.get("name") or distinctive:
         if config["good_from"] and similarity is not None and similarity >= config["good_from"]:
             return "good", f"meaning score {similarity:.3f} is at or above answer.good_from {config['good_from']:g}, and a query word is in the name or description"
         return "possible", "a query word is in the name or description; nothing confirms it"

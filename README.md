@@ -109,8 +109,8 @@ The first word says how far to trust the answer. A result marked `possible` or `
 
 - `exact`: the skill's name is what you asked for.
 - `good`: something judged the answer: AI ranking chose it, or you set `answer.good_from` (off by default; see [settings](docs/settings.md)).
-- `possible`: a word of your task is in the skill's name or description, and nothing confirms it. On the free search this is the normal first answer: read the summary, then use the skill if it fits.
-- `weak`: no word of yours is in the name or description; only the meaning, or only the skill's body, relates. Read the summary, and carry on without a skill if it does not fit.
+- `possible`: a word of your task is in the skill's name or description, and nothing confirms it. A common word such as "a" or "the" in the description does not count (a word in the name always does; the list is `answer.hide_words`, see [settings](docs/settings.md)). On the free search this is the normal first answer: read the summary, then use the skill if it fits.
+- `weak`: no word of yours, other than common ones, is in the name or description; only the meaning, or only the skill's body, relates. Read the summary, and carry on without a skill if it does not fit.
 - `close`: the first two results score nearly the same by meaning and no word of yours is in the first one's name or description. It does not say that either fits: read both summaries and pick one, or carry on without a skill.
 - `no_match`: nothing matched; or you turned refusal on (see [settings](docs/settings.md)) and the best meaning score is below the number you set; or AI ranking is on and the AI says none of the skills it was shown fits (when it was shown only the nearest skills, the text says "None of the N nearest skills fits this task"). Carry on without a skill. With refusal off, the free search does not judge whether a non-empty list fits: it says `no_match` only when nothing matched.
 
