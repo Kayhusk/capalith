@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/capalith-mark.svg" alt="Capalith logo" width="240">
+  <img src="assets/capalith-mark.svg" alt="Capalith logo" width="120">
 </p>
 
 # Capalith
@@ -8,7 +8,13 @@
 
 It is for people who use Claude Code, Codex or another MCP client and keep a folder of skills. Alpha software; Linux x86_64 with Python 3.11 is the supported platform.
 
-Install: `uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.1/capalith-0.2.1-py3-none-any.whl`, then `capalith-model provision`, then connect your agent. The [full steps](#full-installation) say what each one does.
+Install:
+
+```bash
+uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.2/capalith-0.2.2-py3-none-any.whl
+```
+
+Then run `capalith-model provision` and connect your agent. The [full steps](#full-installation) say what each one does.
 
 Capalith is a local-first catalog for portable agent skills. It indexes each skill with its supporting files from local directories or Git branches and tags. Search returns ranked matches, declared relationships, and the IDs a host needs to read a selected skill.
 
@@ -26,7 +32,7 @@ Capalith provides:
 
 Connect Capalith, then ask your agent to find a skill for a task. The server starts without a catalog or source arguments. The first search discovers supported skill directories, prepares the local catalog, and returns matches. No readiness call, database path, source IDs, separate scan command, or companion-guide installation is required. Capalith provides navigation; the agent decides when to use it and the host retains control of skill loading.
 
-Supported: Linux on x86_64 with Python 3.11 and SQLite FTS5. Git is needed only for Git sources. Releases are distributed through GitHub, not a package registry. The latest release is [0.2.1](https://github.com/Kayhusk/capalith/releases/tag/v0.2.1), a public pre-release, and its README is at that tag; earlier releases are on the [releases page](https://github.com/Kayhusk/capalith/releases), and 0.1.4, 0.1.5 and 0.2.0 were never published (the [changelog](CHANGELOG.md) includes them in 0.2.1).
+Supported: Linux on x86_64 with Python 3.11 and SQLite FTS5. Git is needed only for Git sources. Releases are distributed through GitHub, not a package registry. The latest release is [0.2.2](https://github.com/Kayhusk/capalith/releases/tag/v0.2.2), a public pre-release, and its README is at that tag; earlier releases are on the [releases page](https://github.com/Kayhusk/capalith/releases), and 0.1.4, 0.1.5 and 0.2.0 were never published (the [changelog](CHANGELOG.md) includes them in 0.2.1).
 
 ### Full installation
 
@@ -36,7 +42,7 @@ Linux on x86_64 with Python 3.11 (uv fetches it for you). The test suite passes 
 2. Install Capalith from its release wheel:
 
    ```bash
-   uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.1/capalith-0.2.1-py3-none-any.whl
+   uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.2/capalith-0.2.2-py3-none-any.whl
    ```
 
    To install a checkout of this repository instead (for example to try a change of your own), run `uv tool install --python 3.11 .` in it.

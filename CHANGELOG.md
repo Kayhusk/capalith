@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.2 (release candidate, not released)
+## 0.2.2, 2026-11-25
 
 - **A common word no longer makes a false `possible`.** A search such as "book a dentist appointment" answered `possible` for a violin skill and a tide-table skill because the word "a" is in their descriptions. Now a word that is on the common-word list (`answer.hide_words`, shipped with a default; empty it to get the old rule) counts toward `possible` only when it is in a skill's name. The results and their order do not change, only the status word: on our 61 labelled development queries 8 first results moved from `possible` to `weak`, all of them wrong first answers, and none of the 29 right first answers changed.
 - **The `weak` line matches its tag.** It said no word of yours was in the name or description while the tag named a word found in the body. It now says the words are only in the body or file names, or that the only words shared are common ones. The sentences are settings (`answer.signals`).
