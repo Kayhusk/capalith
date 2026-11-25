@@ -6,7 +6,9 @@ import math
 import os
 import posixpath
 import re
+import errno
 import sqlite3
+import stat
 import unicodedata
 import uuid
 import atexit
@@ -22,6 +24,7 @@ from urllib.parse import quote, urlsplit
 
 from capalith import semantic
 from capalith.settings import defaults, load_settings, settings_operation
+from capalith.textsafe import visible
 from capalith.catalog import (
     CATALOG_FORMAT_VERSION,
     CatalogObservation,
@@ -319,6 +322,34 @@ class StoreError(Exception):
     pass
 
 
+class StoreLinkRefused(StoreError):
+    """A link in the path of the catalog's folder is refused on purpose; this says which part is the link and what to do.
+    The text names only that part of the owner's own path, shown through `visible`."""
+
+    def __init__(self, link: Path) -> None:
+        super().__init__(
+            f"catalog_link_refused: a link in the path of the catalog folder is refused: {visible(link)}. "
+            "Capalith does not follow links there. Point XDG_DATA_HOME or storage.data_dir at the real folder."
+        )
+
+
+def _is_link(name: str, folder_descriptor: int) -> bool:
+    """Whether `name`, looked at (not followed) through the held folder, is a link; any trouble looking means no."""
+    try:
+        return stat.S_ISLNK(os.stat(name, dir_fd=folder_descriptor, follow_symlinks=False).st_mode)
+    except OSError:
+        return False
+
+
+class LinkInPath(OSError):
+    """The no-follow open of one part of a path failed because that part is a link. An OSError with the original errno, so a
+    caller that catches OSError is unaffected; `link` is the path up to and including that part."""
+
+    def __init__(self, original: OSError, link: Path) -> None:
+        super().__init__(original.errno, original.strerror, original.filename)
+        self.link = link
+
+
 class StoreSchemaNewer(StoreError):
     """The catalog was written by a newer Capalith. The one setup error whose cause is told to the caller: its text is
     fixed and holds two numbers, no path, source or setting."""
@@ -611,17 +642,25 @@ class Store:
     def _open_parent(self, *, create: bool = False) -> int:
         descriptor = os.open("/", _DIRECTORY_OPEN_FLAGS)
         try:
-            for part in self.path.parent.parts[1:]:
+            for depth, part in enumerate(self.path.parent.parts[1:], start=2):
                 if create:
                     try:
                         os.mkdir(part, mode=0o700, dir_fd=descriptor)
                     except FileExistsError:
                         pass
-                child = os.open(
-                    part,
-                    _DIRECTORY_OPEN_FLAGS,
-                    dir_fd=descriptor,
-                )
+                try:
+                    child = os.open(
+                        part,
+                        _DIRECTORY_OPEN_FLAGS,
+                        dir_fd=descriptor,
+                    )
+                except OSError as error:
+                    # Only the refusal of a link is named as one: the no-follow open failed with the error a link gives
+                    # (not a directory, or too many links), and this very part, looked at through the folder just held,
+                    # is a link. Any other failure (no descriptors left, no permission, a missing folder) is passed on as it was.
+                    if error.errno in (errno.ENOTDIR, errno.ELOOP) and _is_link(part, descriptor):
+                        raise LinkInPath(error, Path(*self.path.parent.parts[:depth])) from error
+                    raise
                 os.close(descriptor)
                 descriptor = child
             return descriptor
