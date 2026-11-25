@@ -6,9 +6,10 @@ Every value is a number, a time, or a word from a fixed list or a lowercase code
 and an account never reach the file. With `usage.skill_names` on (the owner's choice) the names of the first three
 results are added, each cut to a safe name.
 
-The folder follows the rules of the other private folders: an absolute folder from the user-owned settings, made
-owner-only (0700), the files 0600, no symbolic link followed. Logging can never fail or slow a search: every error is
-swallowed and counted (`failures()`), and the work is one short append.
+The folder follows the rules of the other private folders (the ranking cache's): an absolute folder from the
+user-owned settings, opened one step at a time without following a symbolic link, made owner-only (0700), the files 0600.
+Logging can never fail or slow a search: it never waits (every lock is non-blocking), every error is swallowed, and every
+line that did not land is counted (`failures()`).
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from capalith.settings import checked_folder, load_settings
+from capalith.store import Store
 
 LOG_NAME = "usage.jsonl"
 ID_NAME = "install-id"
@@ -35,6 +37,12 @@ ERROR_CODES = frozenset({
     "artifact_not_found", "catalog_newer", "catalog_setup_failed", "database_unavailable", "index_required",
     "internal_error", "invalid_request", "no_skill_sources", "resource_not_found", "settings_error",
     "settings_untrusted", "source_unavailable", "stale_artifact", "stale_view",
+})
+# Every reason the ranking can give for a free search (RankingUnavailable codes and the store's own); a drift test keeps
+# this in step with the source. Anything else is written as "other", never as free text.
+REASONS = frozenset({
+    "cache_unavailable", "configuration_error", "continued_free_view", "empty_roster", "invalid_response",
+    "missing_key", "not_configured", "payload_limit", "provider_error", "provider_timeout", "reserved_name",
 })
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
@@ -74,31 +82,32 @@ def _word(value: object, allowed: frozenset[str] | None = None, fallback: str = 
     return fallback
 
 
-def _private_folder(path: Path) -> None:
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    information = path.stat()
+def _open_folder(directory: Path, *, create: bool) -> int:
+    """The folder as a descriptor, opened one part at a time without following a symbolic link (the ranking cache's way).
+    It must be the user's own and closed to group and others."""
+    descriptor = Store(directory / LOG_NAME)._open_parent(create=create)
+    information = os.fstat(descriptor)
     if information.st_uid != os.getuid() or information.st_mode & 0o077:
+        os.close(descriptor)
         raise PermissionError("usage folder is not private to its owner")
+    return descriptor
 
 
-def _open(path: Path, flags: int) -> int:
-    return os.open(path, flags | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+def _open(name: str, flags: int, folder_descriptor: int) -> int:
+    return os.open(name, flags | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=folder_descriptor)
 
 
-def _install_id(directory: Path) -> str:
+def _install_id(directory: Path, folder_descriptor: int) -> str:
     key = str(directory)
     known = _install_ids.get(key)
     if known:
         return known
-    path = directory / ID_NAME
     try:
-        descriptor = _open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-        with os.fdopen(descriptor, "w") as handle:
+        with os.fdopen(_open(ID_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL, folder_descriptor), "w") as handle:
             handle.write(secrets.token_hex(8) + "\n")
     except FileExistsError:
         pass
-    descriptor = _open(path, os.O_RDONLY)
-    with os.fdopen(descriptor) as handle:
+    with os.fdopen(_open(ID_NAME, os.O_RDONLY, folder_descriptor)) as handle:
         value = handle.read().strip()
     if not _ID.fullmatch(value):
         raise ValueError("install id is not valid")
@@ -106,34 +115,54 @@ def _install_id(directory: Path) -> str:
     return value
 
 
-def _trim(directory: Path, log: Path, days: int, now: datetime) -> None:
-    """Remove the lines older than the retention, only when the oldest line is already too old."""
+def _trim(folder_descriptor: int, days: int, now: datetime) -> None:
+    """Remove the lines older than the retention, only when the oldest line is already too old, and only when nobody else
+    holds the lock: a busy lock skips the trim (the next write tries again)."""
     try:
-        descriptor = _open(log, os.O_RDONLY)
+        reader = _open(LOG_NAME, os.O_RDONLY, folder_descriptor)
     except FileNotFoundError:
         return
-    with os.fdopen(descriptor, "rb") as handle:
+    with os.fdopen(reader, "rb") as handle:
         head = handle.read(160).decode("utf-8", "replace")
     first = _TIME.search(head)
     cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     if first is not None and first.group(1) >= cutoff:
         return
-    lock = _open(directory / LOCK_NAME, os.O_RDWR | os.O_CREAT)
+    lock = _open(LOCK_NAME, os.O_RDWR | os.O_CREAT, folder_descriptor)
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        with os.fdopen(_open(log, os.O_RDONLY), "rb") as handle:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        with os.fdopen(_open(LOG_NAME, os.O_RDONLY, folder_descriptor), "rb") as handle:
             kept = [line for line in handle.read().decode("utf-8", "replace").splitlines()
                     if (found := _TIME.search(line[:160])) and found.group(1) >= cutoff]
-        temporary = directory / f"{LOG_NAME}.{os.getpid()}.tmp"
-        with os.fdopen(_open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC), "w") as handle:
+        temporary = f"{LOG_NAME}.{os.getpid()}.tmp"
+        with os.fdopen(_open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, folder_descriptor), "w") as handle:
             handle.write("".join(line + "\n" for line in kept))
-        os.replace(temporary, log)
+        os.replace(temporary, LOG_NAME, src_dir_fd=folder_descriptor, dst_dir_fd=folder_descriptor)
+    finally:
+        os.close(lock)
+
+
+def _append(folder_descriptor: int, data: bytes) -> None:
+    """One short write in append mode, under a shared lock taken before the log is opened, so a trim (exclusive) can
+    never replace the file between the open and the write. A trim in progress means this line is dropped, not waited for."""
+    lock = _open(LOCK_NAME, os.O_RDWR | os.O_CREAT, folder_descriptor)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        descriptor = _open(LOG_NAME, os.O_WRONLY | os.O_APPEND | os.O_CREAT, folder_descriptor)
+        try:
+            if os.write(descriptor, data) != len(data):
+                raise OSError("short write")
+        finally:
+            os.close(descriptor)
     finally:
         os.close(lock)
 
 
 def _line(tool: str, started: float, result: dict[str, Any] | None, error: str | None,
-          directory: Path, now: datetime, names: bool) -> str:
+          directory: Path, folder_descriptor: int, now: datetime, names: bool) -> str:
     ranking = (result or {}).get("ranking") or {}
     candidates = (result or {}).get("candidates") or []
     status = "other"
@@ -147,12 +176,12 @@ def _line(tool: str, started: float, result: dict[str, Any] | None, error: str |
         "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tool": _word(tool, TOOLS),
         "path": _word(ranking.get("path"), frozenset({"ai", "free"}), "none"),
-        "reason": _word(ranking.get("reason"), None, "none") if ranking.get("reason") else None,
+        "reason": _word(ranking.get("reason"), REASONS) if ranking.get("reason") else None,
         "n": len(candidates) if isinstance(candidates, list) else 0,
         "status": "error" if error else status,
         "ms": max(0, round((time.perf_counter() - started) * 1000)),
         "error": _word(error, ERROR_CODES) if error else "none",
-        "id": _install_id(directory),
+        "id": _install_id(directory, folder_descriptor),
     }
     if names:
         record["names"] = [c["name"] for c in candidates[:3]
@@ -161,7 +190,7 @@ def _line(tool: str, started: float, result: dict[str, Any] | None, error: str |
 
 
 def record_search(tool: str, started: float, result: dict[str, Any] | None = None, error: str | None = None) -> None:
-    """Add one line for a finished search (`started` is its `time.perf_counter()` start). Never raises."""
+    """Add one line for a finished search (`started` is its `time.perf_counter()` start). Never raises, never waits."""
     global _failures
     try:
         settings = load_settings()["usage"]
@@ -169,13 +198,11 @@ def record_search(tool: str, started: float, result: dict[str, Any] | None = Non
             return
         directory = folder()
         now = datetime.now(timezone.utc)
-        _private_folder(directory)
-        line = _line(tool, started, result, error, directory, now, settings["skill_names"])
-        log = directory / LOG_NAME
-        _trim(directory, log, settings["retention_days"], now)
-        descriptor = _open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+        descriptor = _open_folder(directory, create=True)
         try:
-            os.write(descriptor, line.encode())
+            line = _line(tool, started, result, error, directory, descriptor, now, settings["skill_names"])
+            _trim(descriptor, settings["retention_days"], now)
+            _append(descriptor, line.encode())
         finally:
             os.close(descriptor)
     except Exception:
@@ -195,8 +222,19 @@ def summarize(directory: Path | None = None) -> dict[str, Any]:
     durations: dict[str, list[int]] = {}
     skipped = 0
     log = directory / LOG_NAME
-    if log.exists():
-        with os.fdopen(_open(log, os.O_RDONLY), "r", encoding="utf-8", errors="replace") as handle:
+    try:
+        descriptor = _open_folder(directory, create=False)
+    except FileNotFoundError:
+        descriptor = None
+    try:
+        reader = _open(LOG_NAME, os.O_RDONLY, descriptor) if descriptor is not None else None
+    except FileNotFoundError:
+        reader = None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if reader is not None:
+        with os.fdopen(reader, "r", encoding="utf-8", errors="replace") as handle:
             for text in handle:
                 try:
                     line = json.loads(text)

@@ -14,7 +14,7 @@ from capalith import __version__, usage
 from capalith.catalog import CatalogError
 from capalith.identity import BundleEntryError
 from capalith.intake import review_git_source, scan_git_source, scan_local_source
-from capalith.store import Source, Store, StoreError
+from capalith.store import Source, Store, StoreError, StoreSchemaNewer
 from capalith.settings import SettingsError, load_settings
 
 
@@ -245,6 +245,7 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
     arguments = parser.parse_args(argv)
 
     old_config = os.environ.get("CAPALITH_CONFIG")
+    search_started: float | None = None   # set when a discover starts: a failure after it is a counted search too
     if arguments.config:
         os.environ["CAPALITH_CONFIG"] = arguments.config
     try:
@@ -286,9 +287,9 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
         elif arguments.command == "artifact" and command_arguments == ["list"]:
             value = _existing_store(database).list_artifacts()
         elif arguments.command == "discover":
+            search_started = time.perf_counter()
             if not command_arguments:
                 raise CatalogError("discovery query must contain a word")
-            started = time.perf_counter()
             value = _existing_store(database).discover(
                 " ".join(command_arguments),
                 source_ids=(
@@ -300,7 +301,7 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
                 offset=arguments.offset,
                 view_id=arguments.view_id,
             )
-            usage.record_search("cli", started, value)
+            usage.record_search("cli", search_started, value)
         elif arguments.command == "traverse" and len(command_arguments) == 2:
             value = _existing_store(database).traverse(
                 command_arguments[0],
@@ -337,9 +338,15 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
         print(str(error), file=stderr)
         return 2
     except sqlite3.Error:
+        if search_started is not None:
+            usage.record_search("cli", search_started, error="database_unavailable")
         print("database operation failed", file=stderr)
         return 1
     except (BundleEntryError, CatalogError, StoreError, OSError) as error:
+        if search_started is not None:   # the same codes the MCP server gives for the same failures
+            usage.record_search("cli", search_started, error=(
+                "catalog_newer" if isinstance(error, StoreSchemaNewer) else
+                "invalid_request" if isinstance(error, CatalogError) else "database_unavailable"))
         print("\\n".join(str(error).splitlines()), file=stderr)
         return 1
     finally:

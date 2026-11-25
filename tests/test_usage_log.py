@@ -5,6 +5,7 @@ prints from that file), and the settings. Nothing here reads a private function.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -12,12 +13,16 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import anyio
 from mcp import ClientSession, StdioServerParameters, stdio_client
 
+from capalith import usage
 from capalith.intake import scan_local_source
 from capalith.settings import defaults
 from capalith.store import Store
@@ -119,6 +124,21 @@ class Workspace:
         log = self.folder / "usage.jsonl"
         log.write_text("".join(json.dumps(line, separators=(",", ":")) + "\n" for line in lines))
         log.chmod(0o600)
+
+
+@contextlib.contextmanager
+def logging_to(folder: Path, retention_days: int = 30):
+    """In this process, the log on and aimed at `folder`, through a user settings file."""
+    with tempfile.TemporaryDirectory() as directory:
+        config = Path(directory) / "settings.toml"
+        config.write_text(f'version = 1\n[usage]\nenabled = true\ndir = "{folder}"\nretention_days = {retention_days}\n')
+        config.chmod(0o600)
+        with patch.dict(os.environ, {"CAPALITH_CONFIG": str(config)}):
+            yield
+
+
+def result_with(reason: str | None, path: str = "free") -> dict:
+    return {"ranking": {"path": path, "reason": reason}, "candidates": [{"name": "x"}]}
 
 
 def entry(day: str, ms: int, path: str = "free", reason: str | None = "not_configured", error: str = "none") -> dict:
@@ -243,6 +263,95 @@ class UsageLogTests(unittest.TestCase):
             work = Workspace(Path(directory), usage="on")
             done = work.command("usage")
             self.assertEqual((0, "no searches logged"), (done.returncode, done.stdout.strip()))
+
+    # The four repairs of the first review (each fails on the first version of the log).
+
+    def test_a_reason_that_is_not_a_known_code_is_written_as_other(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "log"
+            with logging_to(folder):
+                for reason in ("missing_key", "provider_timeout", "saffron", "a" * 80, "Not A Code", None):
+                    usage.record_search("discover", time.perf_counter(), result_with(reason))
+            written = [json.loads(line)["reason"] for line in (folder / "usage.jsonl").read_text().splitlines()]
+            self.assertEqual(["missing_key", "provider_timeout", "other", "other", "other", None], written)
+
+    def test_every_reason_the_code_can_give_is_a_known_code(self) -> None:
+        """A drift guard: a new reason string in the source must be added to `usage.REASONS` on purpose."""
+        used = set()
+        for path in (PROJECT_ROOT / "capalith").glob("*.py"):
+            used |= set(re.findall(r'RankingUnavailable\("([a-z_]+)"\)', path.read_text()))
+        used |= set(re.findall(r'\blocal\("([a-z_]+)"\)', (PROJECT_ROOT / "capalith" / "store.py").read_text()))
+        self.assertTrue(used)
+        self.assertEqual(set(), used - usage.REASONS)
+
+    def test_a_search_never_waits_for_the_log_and_every_lost_line_is_counted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "log"
+            with logging_to(folder):
+                usage.record_search("discover", time.perf_counter(), result_with("not_configured"))   # makes the folder
+                import fcntl
+                holder = os.open(folder / "usage.lock", os.O_RDWR | os.O_CREAT, 0o600)
+                fcntl.flock(holder, fcntl.LOCK_EX)   # someone is rewriting the log
+                log_path = folder / "usage.jsonl"   # an expired first line: a retention trim is due
+                log_path.write_text(json.dumps(entry("2020-01-01", 5), separators=(",", ":")) + "\n" + log_path.read_text())
+                threading.Timer(1.0, os.close, [holder]).start()   # the other party lets go after a second
+                before = usage.failures()
+                started = time.perf_counter()
+                usage.record_search("discover", time.perf_counter(), result_with("not_configured"))
+                waited = time.perf_counter() - started
+            self.assertLess(waited, 0.5, "a search is never held up by the log")
+            self.assertEqual(before + 1, usage.failures(), "the line that did not land is counted")
+            current = [line for line in (folder / "usage.jsonl").read_text().splitlines() if not line.startswith('{"t":"2020')]
+            self.assertEqual(1, len(current))
+            time.sleep(1.1)
+
+    def test_lines_that_land_plus_lines_counted_equal_the_searches_made_while_old_lines_expire(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "log"
+            work = Workspace(Path(directory) / "w", usage="on")
+            work.write_log([entry("2020-01-01", 5)] * 3)
+            old = (work.folder / "usage.jsonl").read_text()
+            folder.mkdir(mode=0o700)
+            (folder / "usage.jsonl").write_text(old)
+            (folder / "usage.jsonl").chmod(0o600)
+            with logging_to(folder):
+                before = usage.failures()
+                threads = [threading.Thread(target=lambda: [usage.record_search("discover", time.perf_counter(), result_with("not_configured"))
+                                                           for _ in range(40)]) for _ in range(4)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+                lost = usage.failures() - before
+            current = [line for line in (folder / "usage.jsonl").read_text().splitlines() if not line.startswith('{"t":"2020')]
+            self.assertEqual(160, len(current) + lost, "no line vanishes without being counted")
+
+    def test_a_folder_or_file_that_is_a_symbolic_link_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "elsewhere"
+            target.mkdir(mode=0o700)
+            link = Path(directory) / "link"
+            link.symlink_to(target)
+            with logging_to(link):
+                before = usage.failures()
+                usage.record_search("discover", time.perf_counter(), result_with("not_configured"))
+            self.assertEqual([], list(target.iterdir()), "nothing is created behind the link")
+            self.assertEqual(before + 1, usage.failures())
+            real = Path(directory) / "real"
+            real.mkdir(mode=0o700)
+            (real / "usage.jsonl").symlink_to(target / "stolen.txt")
+            with logging_to(real):
+                usage.record_search("discover", time.perf_counter(), result_with("not_configured"))
+            self.assertEqual([], list(target.iterdir()), "nothing is written through a linked log file")
+
+    def test_a_command_line_search_that_fails_is_counted_like_an_mcp_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Workspace(Path(directory), usage="on")
+            done = work.command("--db", str(Path(directory) / "missing.sqlite3"), "discover", "secret-needle words")
+            self.assertEqual(1, done.returncode)
+            line = work.lines()[0]
+            self.assertEqual(("cli", "error", "database_unavailable", "none"), (line["tool"], line["status"], line["error"], line["path"]))
+            self.assertNotIn("needle", (work.folder / "usage.jsonl").read_text())
 
 
 if __name__ == "__main__":
