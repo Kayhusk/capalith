@@ -4,6 +4,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+from tests.helpers import open_descriptors
+
 
 class ResourceLifetimeTests(unittest.TestCase):
     def test_completed_catalog_check_cannot_close_descriptors_during_next_setup(self):
@@ -20,9 +22,9 @@ class ResourceLifetimeTests(unittest.TestCase):
 
         def mkdir(path, *args, **kwargs):
             if Path(path).name == "capalith":
-                before = set(os.listdir("/proc/self/fd"))
+                before = open_descriptors()
                 gc.collect()
-                lost.extend(before - set(os.listdir("/proc/self/fd")))
+                lost.extend(before - open_descriptors())
             return original(path, *args, **kwargs)
 
         try:
