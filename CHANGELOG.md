@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 (release candidate, not released)
+
+- **A local usage log, off by default.** With `usage.enabled = true` in your settings file, each search adds one line to a file in an owner-only folder on your machine: time (UTC), tool, ranking path and reason, number of results, status word, duration in ms, setup error code or `none`, and a random id of the install. It never holds the query, a skill's text, a path, a user name or a host name (skill names only if you set `usage.skill_names`). Nothing is sent anywhere. `capalith usage [--json]` prints one line per day: searches, AI and free (by reason), errors, median and 95th percentile duration. Old lines are removed after `usage.retention_days` (default 30). A write that fails is dropped and counted (`config_show` shows `usage.write_failures` while the log is on), so logging never fails a search. Cost on one machine (174 skills, pinned to six cores, 1,200 searches): the logging call took a median of 0.14 to 0.15 ms against a search median of 63 to 65 ms. Everything else is as in 0.2.1.
+
 ## 0.2.1, 2026-11-25
 
 The first public release after 0.1.3. It includes everything in the sections below for 0.2.0, 0.1.5 and 0.1.4, which were never published on their own: read "Before you upgrade" under 0.2.0 first. What 0.2.1 adds on top of them:

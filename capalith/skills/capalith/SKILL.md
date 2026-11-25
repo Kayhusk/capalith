@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires a configured Capalith MCP server."
 metadata:
   author: "Edward Bowie"
-  version: "0.2.1"
+  version: "0.2.2"
 ---
 
 Call `discover` at the start of a task when no skill you already have covers it.

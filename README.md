@@ -221,6 +221,10 @@ These optional modes index only the supplied sources at startup and then keep th
 
 Each server start refreshes this explicit selection. Git startup may fetch the configured ref; local startup needs no network. Restart these connections to pick up later source changes. If startup fails, the server exits rather than serving a stale catalog. Use `--db` below for manual source lifecycle control.
 
+### Count your own usage (off by default)
+
+To see how often your agents search, and how, turn on the local usage log in your settings file (`usage.enabled = true`). It writes one line per search on your own machine: the time, how many results, the status word, the duration and a random install id. It never writes the query, a skill's text, a path or an account, and nothing leaves your machine. `capalith usage` prints one line per day from it. Every setting, what a line holds and the measured cost are in [docs/settings.md](docs/settings.md#a-local-usage-log-off-by-default).
+
 ### Bundled guidance
 
 The server supplies the companion skill as MCP initialization instructions. It also exposes the exact bundled files at `capalith://guide/SKILL.md` and `capalith://guide/references/operations.md`. Clients decide how to expose those instructions and resources. Capalith does not install or activate a native host skill, and no separate skill installation is required by the server.

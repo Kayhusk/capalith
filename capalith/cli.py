@@ -82,7 +82,7 @@ def _configuration_report(database: Path | None) -> dict[str, object]:
         if database is not None and database.is_file()
         else []
     )
-    return {
+    report: dict[str, object] = {
         "schema_version": 1,
         "sources": sources,
         "automatic_behavior": {
@@ -122,6 +122,9 @@ def _configuration_report(database: Path | None) -> dict[str, object]:
             ],
         },
     }
+    if usage.enabled():   # shown only when the owner turned the log on; the one counter of swallowed write failures
+        report["usage"] = {"enabled": True, "write_failures": usage.failures()}
+    return report
 
 
 def _set_source_status(

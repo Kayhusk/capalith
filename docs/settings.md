@@ -89,6 +89,25 @@ The user file's `[ranking]` table can override `model`, `enable_env`, `key_env`,
 
 `ranking.endpoint` comes only from the trusted user file, never from project files, the ranking pointer, search input or environment proxy settings. It must be HTTPS, with a hostname and valid port, without user information, query parameters or fragments. There are no redirects or automatic retries. Configure an endpoint only when you trust it to receive the selected key, queries and skill excerpts. `ranking.key_env` names the secret environment variable; its value is never a file setting. Existing managed transports retain their own controls.
 
+## A local usage log (off by default)
+
+`usage.enabled = true` makes Capalith add one line per search to a file on your own machine, so you can see how it is used. Nothing is sent anywhere. It is off by default, and only your own settings file can turn it on (a project file or a tool call cannot).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `usage.enabled` | `false` | write the log |
+| `usage.dir` | empty | an absolute folder for it; empty means `$XDG_DATA_HOME/capalith/usage` (`~/.local/share/capalith/usage` when unset) |
+| `usage.retention_days` | `30` | lines older than this many days are removed the next time a line is written (1 to 3650) |
+| `usage.skill_names` | `false` | also write the names of the first three results (each name cut to letters, digits, `.`, `_` and `-`) |
+
+Each line (in `usage.jsonl`) holds: the time in UTC to the second; the tool (`discover` for the MCP server, `cli` for the command line); the ranking path (`ai` or `free`, `none` when the call failed) and its reason code; how many results; the status word (`exact`, `good`, `possible`, `weak`, `close`, `no_match`, or `error`); the duration in milliseconds; the error code or `none`; and a random id of this install (kept in `install-id` in the same folder). It never holds your query, a skill's text, a path, your user name or your host name, and it holds a skill's name only when you set `usage.skill_names`. Values come from fixed lists or lowercase codes; anything else is written as `other`.
+
+The folder is owner-only (folder mode 0700, files 0600, no symbolic link followed). If the folder is not yours or is open to your group or to others, nothing is written. Logging never fails or slows a search: a write that fails is dropped and counted, and `config_show` shows the count as `usage.write_failures` while the log is on.
+
+`capalith usage` prints one line per day from the log and nothing else: searches, how many used AI ranking, how many were free (by reason), errors, and the median and 95th percentile duration. `capalith usage --json` prints the same as JSON. It needs no catalog (`--config PATH` selects a settings file).
+
+What we measured. One machine, Linux, the program pinned to six cores, a 174-skill catalog, three runs of 400 searches each, timing the logging call that follows each search: median 0.14 to 0.15 ms and 95th percentile 0.16 to 0.17 ms (largest 1.5 ms, once), against a search median of 63 to 65 ms. That is about 0.2 percent of a search. Not measured: another machine, a very large log, many servers writing the same folder at the same moment, macOS, or a network file system.
+
 ## Sources, storage and Git
 
 `sources.hosts` has entries for `claude`, `codex` and `hermes`. Each accepts `home_env` (an environment-variable name, or empty to disable that lookup), `home_default` (an absolute or `~` path), `user_dirs` (relative to that host home) and `project_dirs` (relative to each task workspace). Directory lists replace their defaults. Relative directory entries cannot escape with `..`. Claude and Codex project folders are checked from the workspace up to its Git root; Hermes project folders are checked at that root, as before. With no Git root, only the current workspace is checked, and Hermes project folders are omitted.

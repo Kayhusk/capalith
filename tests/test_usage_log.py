@@ -97,6 +97,23 @@ class Workspace:
         anyio.run(run)
         return failed[0]
 
+    def structured(self, *calls: tuple[str, dict]) -> list[dict]:
+        """Several tool calls in one stdio session; each call's structured answer."""
+        parameters = StdioServerParameters(
+            command=sys.executable, args=["-m", "capalith.mcp_server", "--db", str(self.database)],
+            cwd=PROJECT_ROOT, env=self.environment())
+        answers: list[dict] = []
+
+        async def run() -> None:
+            async with stdio_client(parameters) as streams:
+                async with ClientSession(*streams) as session:
+                    await session.initialize()
+                    for name, arguments in calls:
+                        answers.append((await session.call_tool(name, arguments)).structured_content or {})
+
+        anyio.run(run)
+        return answers
+
     def write_log(self, lines: list[dict]) -> None:
         self.folder.mkdir(mode=0o700, exist_ok=True)
         log = self.folder / "usage.jsonl"
@@ -183,6 +200,16 @@ class UsageLogTests(unittest.TestCase):
             work = Workspace(Path(directory), usage="on")
             work.folder.write_text("a file where the folder should be")
             self.assertEqual([False], work.discover(QUERY))
+
+    def test_swallowed_write_failures_are_counted_where_the_owner_can_see_them(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Workspace(Path(directory), usage="on")
+            work.folder.write_text("a file where the folder should be")
+            _, report = work.structured(("discover", {"query": QUERY}), ("discover", {"query": "invoice"}), ("config_show", {}))[1:]
+            self.assertEqual({"enabled": True, "write_failures": 2}, report.get("usage"), "one count per swallowed write")
+        with tempfile.TemporaryDirectory() as directory:
+            work = Workspace(Path(directory))   # off: the report has no usage key at all
+            self.assertNotIn("usage", work.structured(("config_show", {}))[0])
 
     def test_old_lines_are_removed_when_a_new_one_is_written(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
