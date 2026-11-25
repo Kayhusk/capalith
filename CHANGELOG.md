@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 (release candidate, not released)
+## 0.2.1, 2026-11-25
 
 The first public release after 0.1.3. It includes everything in the sections below for 0.2.0, 0.1.5 and 0.1.4, which were never published on their own: read "Before you upgrade" under 0.2.0 first. What 0.2.1 adds on top of them:
 
