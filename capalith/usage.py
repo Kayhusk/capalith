@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from capalith.settings import checked_folder, load_settings
-from capalith.store import Store
+from capalith.store import Store, open_or_create
 
 LOG_NAME = "usage.jsonl"
 ID_NAME = "install-id"
@@ -94,6 +94,8 @@ def _open_folder(directory: Path, *, create: bool) -> int:
 
 
 def _open(name: str, flags: int, folder_descriptor: int) -> int:
+    if flags & os.O_CREAT and not flags & os.O_EXCL:   # created if absent, maybe by two servers at once: see open_or_create
+        return open_or_create(name, flags & ~os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=folder_descriptor)
     return os.open(name, flags | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=folder_descriptor)
 
 

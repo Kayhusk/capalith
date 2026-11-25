@@ -351,6 +351,28 @@ class LinkInPath(OSError):
         self.link = link
 
 
+def open_or_create(name: str, flags: int, mode: int, *, dir_fd: int) -> int:
+    """Open `name` in the held folder `dir_fd`, creating it when it is absent, for processes that may do so together.
+
+    `flags` hold neither O_CREAT nor O_EXCL. A plain create-or-open (O_CREAT alone) through a directory descriptor can fail with
+    ENOENT on macOS for the process that loses a race to create the same new name, although the file exists by then (seen on
+    GitHub's macOS runners: 20 of 1,600 first starts of two servers; reported by others as golang/go#81246). The same call with
+    O_EXCL answers the loser EEXIST. So: create with O_EXCL; if the name exists, open it without O_CREAT; if it vanished between
+    the two, look again, three rounds in all. No sleep, and no retry of an error the race does not give: a missing folder ends as
+    the FileNotFoundError it is. A link in the name's place is not followed (O_NOFOLLOW in `flags` refuses it).
+    """
+    for _ in range(3):
+        try:
+            return os.open(name, flags | os.O_CREAT | os.O_EXCL, mode, dir_fd=dir_fd)
+        except FileExistsError:
+            pass
+        try:
+            return os.open(name, flags, dir_fd=dir_fd)
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), name)
+
+
 class StoreSchemaNewer(StoreError):
     """The catalog was written by a newer Capalith. The one setup error whose cause is told to the caller: its text is
     fixed and holds two numbers, no path, source or setting."""
@@ -678,13 +700,12 @@ class Store:
         connection: sqlite3.Connection | None = None
         try:
             parent_descriptor = self._open_parent()
-            flags = os.O_RDONLY if self.read_only else os.O_RDWR | os.O_CREAT
-            database_descriptor = os.open(
-                self.path.name,
-                flags | os.O_CLOEXEC | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=parent_descriptor,
-            )
+            if self.read_only:
+                database_descriptor = os.open(
+                    self.path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=parent_descriptor)
+            else:   # created if absent: two processes may do that together (see open_or_create)
+                database_descriptor = open_or_create(
+                    self.path.name, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=parent_descriptor)
             database_stat = os.fstat(database_descriptor)
             if database_stat.st_nlink > 1:
                 raise StoreError("database file cannot have multiple hard links")
