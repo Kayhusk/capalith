@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from capalith.settings import checked_folder, load_settings
-from capalith.store import Store
+from capalith.store import Store, open_or_create
 
 LOG_NAME = "usage.jsonl"
 ID_NAME = "install-id"
@@ -34,7 +34,7 @@ TOOLS = frozenset({"discover", "cli"})
 STATUSES = frozenset({"exact", "good", "possible", "weak", "close", "no_match"})
 # The setup and call errors the servers name; anything else is written as "other".
 ERROR_CODES = frozenset({
-    "artifact_not_found", "catalog_newer", "catalog_setup_failed", "database_unavailable", "index_required",
+    "artifact_not_found", "catalog_link_refused", "catalog_newer", "catalog_setup_failed", "database_unavailable", "index_required",
     "internal_error", "invalid_request", "no_skill_sources", "resource_not_found", "settings_error",
     "settings_untrusted", "source_unavailable", "stale_artifact", "stale_view",
 })
@@ -94,6 +94,8 @@ def _open_folder(directory: Path, *, create: bool) -> int:
 
 
 def _open(name: str, flags: int, folder_descriptor: int) -> int:
+    if flags & os.O_CREAT and not flags & os.O_EXCL:   # created if absent, maybe by two servers at once: see open_or_create
+        return open_or_create(name, flags & ~os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=folder_descriptor)
     return os.open(name, flags | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=folder_descriptor)
 
 

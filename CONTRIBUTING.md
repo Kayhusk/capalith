@@ -47,7 +47,7 @@ PYTHONWARNINGS=error python -m unittest discover -s tests -v
 
 ## What won't be accepted yet
 
-- **Support claims for another platform.** macOS, Windows (through WSL2) and newer Pythons run in CI so the results can be read, but nothing is listed as supported until its job passes. Fixes that move a job toward passing are welcome; changing the README's "supported" line is the maintainers' step.
+- **Support claims for another platform.** The macOS arm64 jobs (Python 3.11 and 3.12) run on every change and show red when they fail. Linux with Python 3.12 and 3.13, and WSL2, also run so the results can be read. Only Linux x86_64 with Python 3.11 is listed as supported. Fixes that move a platform toward supported are welcome; changing the README's "supported" line is the maintainers' step.
 - **New network use.** Indexing and search of local folders run locally. The network is used only where the README says: the one-time model download (`capalith-model provision`), fetching a configured Git branch or tag for a Git source, and the optional AI ranking, which is off unless the user turns it on. A change that adds another use needs an issue first and is unlikely to be accepted.
 - **Changes that make Capalith install, activate or edit a host's skills.** Capalith finds and ranks skills and says where to read them; the host keeps control of loading. It reads the settings file and never writes it.
 

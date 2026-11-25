@@ -6,7 +6,9 @@ import math
 import os
 import posixpath
 import re
+import errno
 import sqlite3
+import stat
 import unicodedata
 import uuid
 import atexit
@@ -22,6 +24,7 @@ from urllib.parse import quote, urlsplit
 
 from capalith import semantic
 from capalith.settings import defaults, load_settings, settings_operation
+from capalith.textsafe import visible
 from capalith.catalog import (
     CATALOG_FORMAT_VERSION,
     CatalogObservation,
@@ -319,6 +322,57 @@ class StoreError(Exception):
     pass
 
 
+class StoreLinkRefused(StoreError):
+    """A link in the path of the catalog's folder is refused on purpose; this says which part is the link and what to do.
+    The text names only that part of the owner's own path, shown through `visible`."""
+
+    def __init__(self, link: Path) -> None:
+        super().__init__(
+            f"catalog_link_refused: a link in the path of the catalog folder is refused: {visible(link)}. "
+            "Capalith does not follow links there. Point XDG_DATA_HOME or storage.data_dir at the real folder."
+        )
+
+
+def _is_link(name: str, folder_descriptor: int) -> bool:
+    """Whether `name`, looked at (not followed) through the held folder, is a link; any trouble looking means no."""
+    try:
+        return stat.S_ISLNK(os.stat(name, dir_fd=folder_descriptor, follow_symlinks=False).st_mode)
+    except OSError:
+        return False
+
+
+class LinkInPath(OSError):
+    """The no-follow open of one part of a path failed with the error a link gives, and that part is a link when looked at
+    straight afterwards. That is what was seen, not a record of how the path came to be so. An OSError with the original errno,
+    so a caller that catches OSError is unaffected; `link` is the path up to and including that part."""
+
+    def __init__(self, original: OSError, link: Path) -> None:
+        super().__init__(original.errno, original.strerror, original.filename)
+        self.link = link
+
+
+def open_or_create(name: str, flags: int, mode: int, *, dir_fd: int) -> int:
+    """Open `name` in the held folder `dir_fd`, creating it when it is absent, for processes that may do so together.
+
+    `flags` hold neither O_CREAT nor O_EXCL. A plain create-or-open (O_CREAT alone) through a directory descriptor can fail with
+    ENOENT on macOS for the process that loses a race to create the same new name, although the file exists by then (seen on
+    GitHub's macOS runners: 20 of 1,600 first starts of two servers; reported by others as golang/go#81246). The same call with
+    O_EXCL answers the loser EEXIST. So: create with O_EXCL; if the name exists, open it without O_CREAT; if it vanished between
+    the two, look again, three rounds in all. No sleep, and no retry of an error the race does not give: a missing folder ends as
+    the FileNotFoundError it is. A link in the name's place is not followed (O_NOFOLLOW in `flags` refuses it).
+    """
+    for _ in range(3):
+        try:
+            return os.open(name, flags | os.O_CREAT | os.O_EXCL, mode, dir_fd=dir_fd)
+        except FileExistsError:
+            pass
+        try:
+            return os.open(name, flags, dir_fd=dir_fd)
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), name)
+
+
 class StoreSchemaNewer(StoreError):
     """The catalog was written by a newer Capalith. The one setup error whose cause is told to the caller: its text is
     fixed and holds two numbers, no path, source or setting."""
@@ -425,8 +479,11 @@ _folder_path = _macos_folder_path
 def _confirm_folder(folder: str, parent_descriptor: int) -> None:
     """macOS only: SQLite opened by path, so check that the path still leads to the folder we hold.
 
-    EXPERIMENTAL AND UNSUPPORTED on macOS; no Mac has run this. The file itself is checked by the checks that
-    follow in _connect (the name inside the held folder must still be the file held).
+    EXPERIMENTAL AND UNSUPPORTED on macOS. GitHub's macOS arm64 runner (macos-15, CPython 3.11 and 3.12) runs the whole
+    test suite on every change, including tests/test_macos_anchor.py against the real F_GETPATH call, and it passes (run
+    45701144693, commit 7a90e09). That is all it shows: no person has used this on a Mac, and no hostile process has tried to
+    beat it; the tests make their own swaps. The file itself is checked by the checks that follow in _connect (the name inside
+    the held folder must still be the file held).
 
     Linux needs none of this: /proc/self/fd/<n> is the held folder itself, so nothing can be swapped under it.
     Here the guarantee is weaker, and only this much: a PERSISTENT swap (the path still leads elsewhere when
@@ -611,17 +668,25 @@ class Store:
     def _open_parent(self, *, create: bool = False) -> int:
         descriptor = os.open("/", _DIRECTORY_OPEN_FLAGS)
         try:
-            for part in self.path.parent.parts[1:]:
+            for depth, part in enumerate(self.path.parent.parts[1:], start=2):
                 if create:
                     try:
                         os.mkdir(part, mode=0o700, dir_fd=descriptor)
                     except FileExistsError:
                         pass
-                child = os.open(
-                    part,
-                    _DIRECTORY_OPEN_FLAGS,
-                    dir_fd=descriptor,
-                )
+                try:
+                    child = os.open(
+                        part,
+                        _DIRECTORY_OPEN_FLAGS,
+                        dir_fd=descriptor,
+                    )
+                except OSError as error:
+                    # Only the refusal of a link is named as one: the no-follow open failed with the error a link gives
+                    # (not a directory, or too many links), and this very part, looked at through the folder just held,
+                    # is a link. Any other failure (no descriptors left, no permission, a missing folder) is passed on as it was.
+                    if error.errno in (errno.ENOTDIR, errno.ELOOP) and _is_link(part, descriptor):
+                        raise LinkInPath(error, Path(*self.path.parent.parts[:depth])) from error
+                    raise
                 os.close(descriptor)
                 descriptor = child
             return descriptor
@@ -635,13 +700,12 @@ class Store:
         connection: sqlite3.Connection | None = None
         try:
             parent_descriptor = self._open_parent()
-            flags = os.O_RDONLY if self.read_only else os.O_RDWR | os.O_CREAT
-            database_descriptor = os.open(
-                self.path.name,
-                flags | os.O_CLOEXEC | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=parent_descriptor,
-            )
+            if self.read_only:
+                database_descriptor = os.open(
+                    self.path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=parent_descriptor)
+            else:   # created if absent: two processes may do that together (see open_or_create)
+                database_descriptor = open_or_create(
+                    self.path.name, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=parent_descriptor)
             database_stat = os.fstat(database_descriptor)
             if database_stat.st_nlink > 1:
                 raise StoreError("database file cannot have multiple hard links")

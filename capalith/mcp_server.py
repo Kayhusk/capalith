@@ -26,7 +26,7 @@ from capalith.catalog import CatalogError
 from capalith import answer, usage
 from capalith.cli import _configuration_report
 from capalith.onboarding import discover_sources, prepare_catalog
-from capalith.store import Store, StoreError, StoreSchemaNewer
+from capalith.store import Store, StoreError, StoreLinkRefused, StoreSchemaNewer
 from capalith.settings import SettingsError, defaults, load_settings, settings_snapshot
 from capalith.textsafe import visible
 
@@ -431,8 +431,8 @@ def create_server(
                             if not roots:
                                 return _failure(_no_sources_text(searched))
                             database = await run_sync(lambda: prepare_catalog(roots))
-                        except StoreSchemaNewer as error:
-                            return _failure(str(error))        # fixed text, two numbers: the cause is safe to tell
+                        except (StoreSchemaNewer, StoreLinkRefused) as error:
+                            return _failure(str(error))        # fixed texts: two numbers, or the owner's own link, escaped
                         except Exception:
                             return _failure("catalog_setup_failed")
                     if name == "index_skills":
@@ -480,7 +480,7 @@ def create_server(
             return _success(value)
         except SettingsError as error:
             return _failure(str(error))
-        except StoreSchemaNewer as error:
+        except (StoreSchemaNewer, StoreLinkRefused) as error:
             return _failure(str(error))
         except StoreError as error:
             code = str(error).partition(":")[0]
@@ -598,7 +598,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if managed:
             try:
                 database = prepare_catalog(arguments.source or (), arguments.git or ())
-            except (StoreSchemaNewer, SettingsError) as error:
+            except (StoreSchemaNewer, StoreLinkRefused, SettingsError) as error:
                 # Fixed texts that name no value: a newer catalog, or the rejected settings key (`settings_error: unknown key X`).
                 print(str(error), file=sys.stderr)
                 return 1

@@ -11,7 +11,7 @@ from typing import Sequence
 import yaml
 
 from capalith.intake import scan_git_source, scan_local_source
-from capalith.store import Store, StoreError
+from capalith.store import LinkInPath, Store, StoreError, StoreLinkRefused, open_or_create
 from capalith.settings import load_settings, settings_operation
 
 
@@ -153,11 +153,15 @@ def prepare_catalog(
     for kind, locator, _ in selected:
         if kind == "local":
             store.validate_local_source(Path(locator))
-    parent_descriptor = store._open_parent(create=True)
     try:
-        descriptor = os.open(
+        parent_descriptor = store._open_parent(create=True)
+    except LinkInPath as error:   # the open itself refused a link; any other failure passes on unchanged
+        raise StoreLinkRefused(error.link) from error
+    try:
+        # Two servers starting together both create this file; see open_or_create for why a plain O_CREAT is not enough on macOS.
+        descriptor = open_or_create(
             database.with_suffix(".lock").name,
-            os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600,
+            os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600,
             dir_fd=parent_descriptor,
         )
     finally:
