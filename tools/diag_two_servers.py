@@ -1,4 +1,8 @@
-"""Diagnostic only (branch capalith-mac-diag, never main): two servers' first start at the same moment, many times, and the real cause.
+"""FOR GITHUB'S CI RUNNER ONLY, never for a person's machine. It prints the real exception text, which holds paths: on the runner those
+are the runner's own throwaway folders and hold nothing of ours. It refuses to run unless the GITHUB_ACTIONS variable is "true"
+(DIAG_ALLOW_LOCAL=1 overrides that for our own checks on Linux).
+
+Diagnostic only (branch capalith-mac-diag, never main): two servers' first start at the same moment, many times, and the real cause.
 
 usage: python tools/diag_two_servers.py REPS PARALLEL [JITTER_MS]
 
@@ -10,13 +14,12 @@ frames (file, line, function). It runs the real `mcp_server.main` with the same 
 wraps `prepare_catalog` to print the exception before main swallows it; no product code is changed. With JITTER_MS above 0, a
 child sleeps up to that long, with probability 0.3, before each mkdir, open, flock and sqlite3.connect, so the two starts walk
 the steps in more orders. Every child gets its own home, config, cache and data folders inside the pair's generated folder and no CAPALITH_* variable, so no
-setting of the machine it runs on is read and nothing is created outside it. What is printed has the generated folder shown as
-<root> and any other absolute path as <path>. No network, no paid call.
+setting of the machine it runs on is read and nothing is created outside it. Nothing is filtered: the exception message, the causes and
+the frames are printed as they are. No network, no paid call.
 """
 import json
 import os
 import platform
-import re
 import sqlite3
 import subprocess
 import sys
@@ -60,15 +63,6 @@ sys.exit(mcp_server.main(["--source", first, "--source", second, "--source", fir
 '''
 
 
-_PATH = re.compile(r"(?<![\w<>])/(?:[\w.@+~-]+/)*[\w.@+~-]*")
-
-
-def clean(text: str, root: Path) -> str:
-    """The generated folder as <root>; every other absolute path as <path>."""
-    text = text.replace(str(root), "<root>")
-    return _PATH.sub(lambda m: m.group(0) if m.group(0).startswith("/<") else "<path>", text)
-
-
 def make_skill(root: Path, name: str, text: str) -> None:
     folder = root / name
     (folder / "references").mkdir(parents=True)
@@ -97,7 +91,7 @@ def one_pair(index: int, jitter_ms: float, work: Path, results: list, lock: thre
             out, err = child.communicate()
             err += "\nTIMEOUT after 120 s"
         with lock:
-            results.append({"pair": index, "child": number, "code": child.returncode, "stdout": clean(out[:200], root), "stderr": clean(err[-1500:], root)})
+            results.append({"pair": index, "child": number, "code": child.returncode, "stdout": out[:200], "stderr": err[-1500:]})
 
 
 def run(reps: int, parallel: int, jitter_ms: float) -> None:
@@ -134,6 +128,9 @@ def run(reps: int, parallel: int, jitter_ms: float) -> None:
 
 
 if __name__ == "__main__":
+    if os.environ.get("GITHUB_ACTIONS") != "true" and os.environ.get("DIAG_ALLOW_LOCAL") != "1":
+        sys.exit("tools/diag_two_servers.py prints real exception text with paths and is for GitHub's CI runner only "
+                 "(GITHUB_ACTIONS is not 'true'); set DIAG_ALLOW_LOCAL=1 for a check of our own.")
     reps, parallel = int(sys.argv[1]), int(sys.argv[2])
     jitter_ms = float(sys.argv[3]) if len(sys.argv) > 3 else 0.0
     print(f"platform={platform.platform()} python={sys.version.split()[0]} sqlite={sqlite3.sqlite_version} cpus={os.cpu_count()} "
