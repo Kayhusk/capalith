@@ -75,6 +75,7 @@ jobs:
       - run: PYTHONWARNINGS=error python -m unittest discover -s tests -v
       # TEMPORARY, branch capalith-mac-diag only, never main: why one of two servers started together sometimes exits 1.
       - name: Diagnostic, two servers' first start repeated
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: python tools/diag_two_servers.py 200 3 3
 

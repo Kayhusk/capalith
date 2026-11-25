@@ -9,11 +9,14 @@ for every failing start prints what the server hid: the exception type, errno, t
 frames (file, line, function). It runs the real `mcp_server.main` with the same arguments and environment as the test and only
 wraps `prepare_catalog` to print the exception before main swallows it; no product code is changed. With JITTER_MS above 0, a
 child sleeps up to that long, with probability 0.3, before each mkdir, open, flock and sqlite3.connect, so the two starts walk
-the steps in more orders. Paths shown are the script's own temporary folders. No network, no paid call.
+the steps in more orders. Every child gets its own home, config, cache and data folders inside the pair's generated folder and no CAPALITH_* variable, so no
+setting of the machine it runs on is read and nothing is created outside it. What is printed has the generated folder shown as
+<root> and any other absolute path as <path>. No network, no paid call.
 """
 import json
 import os
 import platform
+import re
 import sqlite3
 import subprocess
 import sys
@@ -57,6 +60,15 @@ sys.exit(mcp_server.main(["--source", first, "--source", second, "--source", fir
 '''
 
 
+_PATH = re.compile(r"(?<![\w<>])/(?:[\w.@+~-]+/)*[\w.@+~-]*")
+
+
+def clean(text: str, root: Path) -> str:
+    """The generated folder as <root>; every other absolute path as <path>."""
+    text = text.replace(str(root), "<root>")
+    return _PATH.sub(lambda m: m.group(0) if m.group(0).startswith("/<") else "<path>", text)
+
+
 def make_skill(root: Path, name: str, text: str) -> None:
     folder = root / name
     (folder / "references").mkdir(parents=True)
@@ -69,7 +81,10 @@ def one_pair(index: int, jitter_ms: float, work: Path, results: list, lock: thre
     first, second = root / "first", root / "second"
     make_skill(first, "shared-name", "first")
     make_skill(second, "shared-name", "second")
-    env = {**os.environ, "XDG_DATA_HOME": str(root / "data")}
+    (root / "home").mkdir()
+    # no CAPALITH_* variable (no settings file named, no model or ranking choice) and every folder the server could use inside this root
+    env = {**{k: v for k, v in os.environ.items() if not k.startswith("CAPALITH_")}, "HOME": str(root / "home"),
+           "XDG_CONFIG_HOME": str(root / "config"), "XDG_CACHE_HOME": str(root / "cache"), "XDG_DATA_HOME": str(root / "data")}
     start_at = time.time() + 3.0
     children = [subprocess.Popen([sys.executable, "-c", CHILD, str(jitter_ms), str(index * 2 + k), str(start_at), str(first), str(second)],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True)
@@ -82,7 +97,7 @@ def one_pair(index: int, jitter_ms: float, work: Path, results: list, lock: thre
             out, err = child.communicate()
             err += "\nTIMEOUT after 120 s"
         with lock:
-            results.append({"pair": index, "child": number, "code": child.returncode, "stdout": out[:200], "stderr": err[-1500:]})
+            results.append({"pair": index, "child": number, "code": child.returncode, "stdout": clean(out[:200], root), "stderr": clean(err[-1500:], root)})
 
 
 def run(reps: int, parallel: int, jitter_ms: float) -> None:
