@@ -200,6 +200,12 @@
     "refuse_below": 0.0,
     "good_from": 0.0
   },
+  "usage": {
+    "enabled": false,
+    "dir": "",
+    "retention_days": 30,
+    "skill_names": false
+  },
   "compatibility": {
     "semantic_fingerprint": "af7a975567f4b15ba4806df15130c51ede1f3c7be5f76a5c4045da6efb237ec2",
     "semantic_key": "Qdrant/bge-small-en-v1.5-onnx-Q@52398278842ec682c6f32300af41344b1c0b0bb2"

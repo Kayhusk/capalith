@@ -300,6 +300,11 @@ def _validate(config: dict) -> None:
     storage = config["storage"]
     if storage["data_dir"]:
         checked_folder(storage["data_dir"], "storage.data_dir")
+    usage = config["usage"]
+    if usage["dir"]:
+        checked_folder(usage["dir"], "usage.dir")
+    if not 1 <= usage["retention_days"] <= 3650:
+        raise SettingsError("settings_error: usage.retention_days must be from 1 to 3650")
     if "cache_dir" in config["ranking"]:
         checked_folder(config["ranking"]["cache_dir"], "ranking.cache_dir")
     # SQLite's busy handler accepts milliseconds in a signed 32-bit integer.
