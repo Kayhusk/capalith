@@ -34,7 +34,7 @@ TOOLS = frozenset({"discover", "cli"})
 STATUSES = frozenset({"exact", "good", "possible", "weak", "close", "no_match"})
 # The setup and call errors the servers name; anything else is written as "other".
 ERROR_CODES = frozenset({
-    "artifact_not_found", "catalog_newer", "catalog_setup_failed", "database_unavailable", "index_required",
+    "artifact_not_found", "catalog_link_refused", "catalog_newer", "catalog_setup_failed", "database_unavailable", "index_required",
     "internal_error", "invalid_request", "no_skill_sources", "resource_not_found", "settings_error",
     "settings_untrusted", "source_unavailable", "stale_artifact", "stale_view",
 })

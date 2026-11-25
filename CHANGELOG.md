@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A linked data folder is named.** A server whose catalog folder, or a folder above it, is a link used to exit with `catalog_setup_failed` and no cause. It now says `catalog_link_refused: a link in the path of the catalog folder is refused: <the link>` and to point `XDG_DATA_HOME` or `storage.data_dir` at the real folder. The refusal itself is unchanged: Capalith still does not follow links there, and any other setup failure keeps its old text. The link is shown with control characters escaped.
+
 ## 0.2.2, 2026-11-25
 
 - **A common word no longer makes a false `possible`.** A search such as "book a dentist appointment" answered `possible` for a violin skill and a tide-table skill because the word "a" is in their descriptions. Now a word that is on the common-word list (`answer.hide_words`, shipped with a default; empty it to get the old rule) counts toward `possible` only when it is in a skill's name. The results and their order do not change, only the status word: on our 61 labelled development queries 8 first results moved from `possible` to `weak`, all of them wrong first answers, and none of the 29 right first answers changed.

@@ -11,7 +11,7 @@ from typing import Sequence
 import yaml
 
 from capalith.intake import scan_git_source, scan_local_source
-from capalith.store import Store, StoreError
+from capalith.store import Store, StoreError, StoreLinkRefused, first_link
 from capalith.settings import load_settings, settings_operation
 
 
@@ -153,7 +153,13 @@ def prepare_catalog(
     for kind, locator, _ in selected:
         if kind == "local":
             store.validate_local_source(Path(locator))
-    parent_descriptor = store._open_parent(create=True)
+    try:
+        parent_descriptor = store._open_parent(create=True)
+    except OSError as error:
+        link = first_link(database.parent)   # only explains the refusal; the open above is what refuses
+        if link is None:
+            raise
+        raise StoreLinkRefused(link) from error
     try:
         descriptor = os.open(
             database.with_suffix(".lock").name,

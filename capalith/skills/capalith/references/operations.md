@@ -124,6 +124,7 @@ Capalith returns IDs and stored data. The agent decides whether to use Capalith 
 - `index_required`: no ready catalog exists. A first `discover` handles initial setup in the default mode. After failed setup, correct the cause and explicitly refresh with `index_skills`, or supply corrected context to `discover`; unchanged searches do not retry setup.
 - `no_skill_sources`: no supported source directory was found. Use a task-supplied workspace or explicit skill directory if available; otherwise report the missing source. Do not crawl the disk.
 - `catalog_setup_failed`: read `config_show` warnings and check the selected roots and writable data location. Correct the cause before retrying; do not silently expand the selection.
+- `catalog_link_refused`: a link in the path of the catalog folder is refused on purpose, and the message names the link. Do not follow it or work around it. Tell the user to point `XDG_DATA_HOME` or `storage.data_dir` at the real folder.
 - `catalog_newer`: the catalog file was written by a newer Capalith. Do not delete or edit it. Tell the user to upgrade Capalith, or to point the server at another catalog.
 - `source_unavailable`: report the unavailable source. Do not enable it. In agent-managed mode, refresh only if the existing selection is still authorized and the source is accessible again.
 - `database_unavailable`: report that the configured catalog cannot be read. Do not create or migrate it.

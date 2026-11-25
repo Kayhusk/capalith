@@ -7,6 +7,7 @@ import os
 import posixpath
 import re
 import sqlite3
+import stat
 import unicodedata
 import uuid
 import atexit
@@ -22,6 +23,7 @@ from urllib.parse import quote, urlsplit
 
 from capalith import semantic
 from capalith.settings import defaults, load_settings, settings_operation
+from capalith.textsafe import visible
 from capalith.catalog import (
     CATALOG_FORMAT_VERSION,
     CatalogObservation,
@@ -317,6 +319,31 @@ def _semantic_query_vector(query: str) -> bytes | None:
 
 class StoreError(Exception):
     pass
+
+
+class StoreLinkRefused(StoreError):
+    """A link in the path of the catalog's folder is refused on purpose; this says which part is the link and what to do.
+    The text names only that part of the owner's own path, shown through `visible`."""
+
+    def __init__(self, link: Path) -> None:
+        super().__init__(
+            f"catalog_link_refused: a link in the path of the catalog folder is refused: {visible(link)}. "
+            "Capalith does not follow links there. Point XDG_DATA_HOME or storage.data_dir at the real folder."
+        )
+
+
+def first_link(path: Path) -> Path | None:
+    """The first part of an absolute path that is a link (lstat only: nothing is opened or followed), else None.
+    Used only to explain a refusal that has already happened."""
+    current = Path("/")
+    for part in path.parts[1:]:
+        current = current / part
+        try:
+            if stat.S_ISLNK(os.lstat(current).st_mode):
+                return current
+        except OSError:
+            return None
+    return None
 
 
 class StoreSchemaNewer(StoreError):
