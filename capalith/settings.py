@@ -359,6 +359,11 @@ def _validate_answer(answer: dict) -> None:
             raise SettingsError(f"settings_error: answer.{key} outside range")
     if any(type(word) is not str or not re.fullmatch(r"\w+", word) for word in answer["hide_words"]):
         raise SettingsError("settings_error: answer.hide_words must contain words")
+    for key, text in answer["signals"].items():
+        if type(text) is not str or not text:
+            raise SettingsError(f"settings_error: answer.signals.{key} must be text")
+        if "{" in text or "}" in text:   # a signal is a plain sentence: no placeholder, no braces
+            raise SettingsError(f"settings_error: invalid answer.signals.{key}")
     for key, text in answer["messages"].items():
         if type(text) is not str or not text:
             raise SettingsError(f"settings_error: answer.messages.{key} must be text")

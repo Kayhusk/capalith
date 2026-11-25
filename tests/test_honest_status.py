@@ -113,6 +113,36 @@ class WordsTests(unittest.TestCase):
         self.assertEqual("nothing matched", nothing["signal"])  # the structured record keeps the rule's words for maintainers
         self.assertFalse(any("nearest in the structured" in line for line in nothing["_text"].splitlines()))
 
+    def test_the_weak_line_never_contradicts_its_tag(self):
+        # a word found only in the body: the first line used to say "no word of yours is in its name or description"
+        body = self.shaped([candidate("pdf-filler", similarity=0.8, words=("task",), name_hits=0, description_hits=0)])
+        first = body["_text"].splitlines()[0]
+        self.assertEqual("weak", body["status"])
+        self.assertEqual("matched by meaning and your words 'task'", body["candidates"][0]["why"])
+        self.assertNotIn("no word of yours", first)
+        self.assertIn("only in its body", first)
+        # only a common word shared: the line says so, and the tag shows no word
+        common = self.shaped([candidate("violin-tuning", similarity=0.8, words=("a",), name_hits=0, description_hits=1)], query="book a dentist appointment")
+        self.assertEqual("weak", common["status"])
+        self.assertEqual("matched by meaning", common["candidates"][0]["why"])
+        self.assertIn("common", common["_text"].splitlines()[0])
+        # nothing shared: close in meaning only
+        none = self.shaped([candidate("pdf-filler", similarity=0.8, words=(), name_hits=0, description_hits=0)])
+        self.assertIn("none of your words", none["_text"].splitlines()[0])
+
+    def test_the_weak_wording_is_a_setting_with_a_shipped_default_and_is_checked(self):
+        signals = defaults()["answer"]["signals"]
+        self.assertEqual({"weak_meaning_body", "weak_meaning_common", "weak_meaning", "weak_body", "weak_common"}, set(signals))
+        config = copy.deepcopy(CONFIG)
+        config["signals"]["weak_body"] = "custom wording"
+        record = result([candidate("pdf-filler", name_hits=0, description_hits=0)])
+        self.assertEqual("custom wording", answer.judge(record, config)[1])
+        for bad in ("", "{missing}", "{signal.x}", 3):
+            config = copy.deepcopy(CONFIG)
+            config["signals"]["weak_body"] = bad
+            with self.assertRaises(SettingsError, msg=repr(bad)):
+                _validate_answer(config)
+
     def test_a_refused_search_is_one_line_for_the_agent_and_keeps_the_near_misses_in_the_record(self):
         record = result([candidate("pdf-filler"), candidate("other-skill")])
         record["semantic"]["best_similarity"] = 0.40

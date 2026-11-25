@@ -60,6 +60,7 @@ def judge(result: dict[str, Any], config: dict[str, Any]) -> tuple[str, str]:
     score = top["score"]
     similarity = score.get("semantic_similarity")
     hide = {word.casefold() for word in config["hide_words"]}
+    signals = config["signals"]
     # A word in the name always counts; a word in the description counts unless it is one of the common words
     # (`answer.hide_words`): "a" in "Tune a violin" says nothing about a task that merely contains "a".
     description_words = set(_words(str(top.get("description", ""))))
@@ -72,9 +73,12 @@ def judge(result: dict[str, Any], config: dict[str, Any]) -> tuple[str, str]:
         other = candidates[1]["score"].get("semantic_similarity")
         if other is not None and abs(similarity - other) <= config["close_margin"]:
             return "close", "the first two are within the semantic margin"
+    # The wording says what the tag next to the skill says: words shown there are the shared words that are not common.
+    shared = top.get("matched_terms", [])
+    visible = any(term.casefold() not in hide for term in shared)
     if similarity is not None or "ai_relevance" in score:
-        return "weak", "it is close in meaning but no word of yours is in its name or description"
-    return "weak", "only the skill's body mentions your words"
+        return "weak", signals["weak_meaning_body" if visible else "weak_meaning_common" if shared else "weak_meaning"]
+    return "weak", signals["weak_body" if visible or not shared else "weak_common"]
 
 
 def _summary(description: str, limit: int) -> str:
