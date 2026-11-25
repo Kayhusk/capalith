@@ -14,6 +14,8 @@ Install:
 uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.2/capalith-0.2.2-py3-none-any.whl
 ```
 
+<!-- DRAFT, show only after the first release is on PyPI: replace the code block above with `uv tool install --python 3.11 capalith` -->
+
 Then run `capalith-model provision` and connect your agent. The [full steps](#full-installation) say what each one does.
 
 Capalith is a local-first catalog for portable agent skills. It indexes each skill with its supporting files from local directories or Git branches and tags. Search returns ranked matches, declared relationships, and the IDs a host needs to read a selected skill.

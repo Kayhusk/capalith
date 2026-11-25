@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Kayhusk/capalith",
+  "title": "Capalith",
+  "description": "Local skill search for coding agents: ranks your Agent Skills and says which to read.",
+  "repository": {
+    "url": "https://github.com/Kayhusk/capalith",
+    "source": "github"
+  },
+  "version": "0.2.2",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "capalith",
+      "version": "0.2.2",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

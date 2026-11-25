@@ -11,10 +11,14 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "Edward Bowie" }]
+keywords = ["agent-skills", "mcp", "skills", "search", "claude-code", "codex"]
 classifiers = [
-    "Private :: Do Not Upload",
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
     "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
@@ -28,6 +32,13 @@ dependencies = [
     "numpy==2.4.6",
     "huggingface-hub==1.29.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Kayhusk/capalith"
+Documentation = "https://github.com/Kayhusk/capalith/blob/main/README.md"
+Source = "https://github.com/Kayhusk/capalith"
+Changelog = "https://github.com/Kayhusk/capalith/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Kayhusk/capalith/issues"
 
 [project.scripts]
 capalith = "capalith.cli:main"
