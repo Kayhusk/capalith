@@ -8,8 +8,10 @@ refuses `/var`.
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import sys
+import textwrap
 import tempfile
 import unittest
 from pathlib import Path
@@ -98,6 +100,100 @@ class LinkErrorTests(unittest.TestCase):
             self.assertEqual(
                 f"catalog_link_refused: a link in the path of the catalog folder is refused: {temp / 'linked-data'}. {ADVICE}", text)
             self.assertEqual([], list(real.iterdir()))
+
+
+EXHAUSTED = textwrap.dedent("""
+    import os, resource, sys
+    sys.path.insert(0, {root!r})
+    from capalith.settings import load_settings
+    from capalith import mcp_server
+    from capalith.onboarding import prepare_catalog
+    from pathlib import Path
+    load_settings()
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (64, hard))
+    held = []
+    while True:
+        try:
+            held.append(os.open("/dev/null", os.O_RDONLY))
+        except OSError as error:
+            assert error.errno == 24, error
+            break
+    # one descriptor back, so the failing open is the walk's own
+    os.close(held.pop())
+    if {mode!r} == "main":
+        raise SystemExit(mcp_server.main(["--source", {skills!r}]))
+    try:
+        prepare_catalog([Path({skills!r})])
+    except BaseException as error:
+        print(type(error).__name__, getattr(error, "errno", None), flush=True)
+    else:
+        print("no error", flush=True)
+""")
+
+
+class OtherFailuresAreNotLinkRefusals(unittest.TestCase):
+    """The link error is shown only when the no-follow open of a path part failed because that part is a link."""
+
+    def child(self, temp: Path, mode: str, data_home: Path) -> subprocess.CompletedProcess:
+        skills = temp / "skills"
+        make_skill(skills, "demo-skill", b"demo")
+        return subprocess.run(
+            [sys.executable, "-c", EXHAUSTED.format(root=str(PROJECT_ROOT), mode=mode, skills=str(skills))],
+            input=b"", capture_output=True, cwd=PROJECT_ROOT, timeout=120,
+            env={**os.environ, "XDG_DATA_HOME": str(data_home)})
+
+    def test_running_out_of_descriptors_is_not_called_a_link_even_when_a_later_part_is_a_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory).resolve()
+            real = temp / "real"
+            real.mkdir()
+            (temp / "linked-data").symlink_to(real)
+            result = self.child(temp, "prepare", temp / "linked-data")
+            self.assertEqual(b"OSError 24\n", result.stdout, result.stderr)   # the original error, not StoreLinkRefused
+
+    def test_the_server_start_keeps_its_old_text_when_descriptors_run_out(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory).resolve()
+            real = temp / "real"
+            real.mkdir()
+            (temp / "linked-data").symlink_to(real)
+            result = self.child(temp, "main", temp / "linked-data")
+            self.assertEqual(1, result.returncode, result.stderr)
+            self.assertTrue(result.stderr.startswith(b"catalog_setup_failed:"), result.stderr)
+            self.assertNotIn(b"catalog_link_refused", result.stderr)
+
+    @unittest.skipIf(os.geteuid() == 0, "root is not refused by folder permissions")
+    def test_permission_denied_before_a_link_is_not_called_a_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory).resolve()
+            skills, real = temp / "skills", temp / "real"
+            make_skill(skills, "demo-skill", b"demo")
+            real.mkdir()
+            locked = temp / "locked"
+            locked.mkdir()
+            (locked / "linked").symlink_to(real)
+            locked.chmod(0)
+            try:
+                result = start(skills, locked / "linked/data")
+            finally:
+                locked.chmod(stat.S_IRWXU)
+            self.assertEqual(1, result.returncode)
+            self.assertTrue(result.stderr.startswith(b"catalog_setup_failed:"), result.stderr)
+
+    def test_a_missing_parent_is_still_a_plain_missing_folder_next_to_a_link(self):
+        from capalith.store import LinkInPath, Store
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory).resolve()
+            (temp / "real").mkdir()
+            (temp / "linked").symlink_to(temp / "real")
+            with self.assertRaises(FileNotFoundError) as caught:
+                Store(temp / "missing/deeper/catalog.sqlite3")._open_parent()
+            self.assertNotIsInstance(caught.exception, LinkInPath)
+            with self.assertRaises(LinkInPath) as caught:                     # the link itself is what the open refused
+                Store(temp / "linked/deeper/catalog.sqlite3")._open_parent()
+            self.assertEqual(temp / "linked", caught.exception.link)
+            self.assertIsInstance(caught.exception, OSError)                  # callers that catch OSError still do
 
 
 if __name__ == "__main__":
