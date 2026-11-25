@@ -342,8 +342,9 @@ def _is_link(name: str, folder_descriptor: int) -> bool:
 
 
 class LinkInPath(OSError):
-    """The no-follow open of one part of a path failed because that part is a link. An OSError with the original errno, so a
-    caller that catches OSError is unaffected; `link` is the path up to and including that part."""
+    """The no-follow open of one part of a path failed with the error a link gives, and that part is a link when looked at
+    straight afterwards. That is what was seen, not a record of how the path came to be so. An OSError with the original errno,
+    so a caller that catches OSError is unaffected; `link` is the path up to and including that part."""
 
     def __init__(self, original: OSError, link: Path) -> None:
         super().__init__(original.errno, original.strerror, original.filename)
@@ -456,8 +457,11 @@ _folder_path = _macos_folder_path
 def _confirm_folder(folder: str, parent_descriptor: int) -> None:
     """macOS only: SQLite opened by path, so check that the path still leads to the folder we hold.
 
-    EXPERIMENTAL AND UNSUPPORTED on macOS; no Mac has run this. The file itself is checked by the checks that
-    follow in _connect (the name inside the held folder must still be the file held).
+    EXPERIMENTAL AND UNSUPPORTED on macOS. GitHub's macOS arm64 runner (macos-15, CPython 3.11 and 3.12) runs the whole
+    test suite on every change, including tests/test_macos_anchor.py against the real F_GETPATH call, and it passes (run
+    45701144693, commit 7a90e09). That is all it shows: no person has used this on a Mac, and no hostile process has tried to
+    beat it; the tests make their own swaps. The file itself is checked by the checks that follow in _connect (the name inside
+    the held folder must still be the file held).
 
     Linux needs none of this: /proc/self/fd/<n> is the held folder itself, so nothing can be swapped under it.
     Here the guarantee is weaker, and only this much: a PERSISTENT swap (the path still leads elsewhere when

@@ -7,8 +7,9 @@ on:
 permissions:
   contents: read
 
-# One job is required: Linux x86_64 with CPython 3.11, the only supported platform.
-# The other jobs run so that their results can be read; they do not fail the workflow
+# Linux x86_64 with CPython 3.11 is the only supported platform.
+# The macOS arm64 jobs count: a failure there fails the workflow. They are not required checks (that is a repository setting).
+# The Linux 3.12 and 3.13 jobs and WSL2 run so that their results can be read; they do not fail the workflow
 # (continue-on-error) and nothing lists them as supported until each has passed here.
 # Runner labels are from GitHub's hosted-runner reference: ubuntu-24.04, macos-15 (arm64), windows-2025.
 # Per-platform requirement files come from tools/lock_hashes.py (public PyPI metadata, no install).
@@ -54,9 +55,8 @@ jobs:
       - run: PYTHONWARNINGS=error python -m unittest discover -s tests -v
 
   macos:
-    name: "macOS arm64, CPython ${{ matrix.python }} (not yet proven)"
+    name: "macOS arm64, CPython ${{ matrix.python }}"
     runs-on: macos-15
-    continue-on-error: true
     timeout-minutes: 25
     strategy:
       fail-fast: false

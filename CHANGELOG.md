@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- **A linked data folder is named.** A server whose catalog folder, or a folder above it, is a link used to exit with `catalog_setup_failed` and no cause. It now says `catalog_link_refused: a link in the path of the catalog folder is refused: <the link>` and to point `XDG_DATA_HOME` or `storage.data_dir` at the real folder. The refusal itself is unchanged: Capalith still does not follow links there, and any other setup failure keeps its old text. The link is shown with control characters escaped.
+- **A linked data folder is named.** A server whose catalog folder, or a folder above it, is a link used to exit with `catalog_setup_failed` and no cause. It now says `catalog_link_refused: a link in the path of the catalog folder is refused: <the link>` and to point `XDG_DATA_HOME` or `storage.data_dir` at the real folder. The refusal itself is unchanged: Capalith still does not follow links there, and any other setup failure keeps its old text. The link is shown with control characters escaped. The sentence says what Capalith saw right after the failed open (that part of the path is a link); it does not record how the path came to be that way.
+- **The macOS jobs now count.** The two macOS arm64 jobs (Python 3.11 and 3.12) no longer say "not yet proven" and no longer pass when tests fail, so a macOS failure shows red. The whole test suite passes there on GitHub's runner. Before, 173 of 238 tests failed, because the tests' temporary folder sat under macOS's `/var` link, which Capalith refuses on purpose, and a few tests read Linux's `/proc`. Only tests changed. macOS is still not supported: no person has followed the README on a Mac, the CI does not run the model download or an agent connection, and Intel Macs are not covered.
 
 ## 0.2.2, 2026-11-25
 
