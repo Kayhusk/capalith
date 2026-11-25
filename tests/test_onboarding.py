@@ -18,7 +18,7 @@ from mcp_types import TextResourceContents
 from capalith.identity import BundleEntryError, hash_bundle
 from capalith.onboarding import prepare_catalog
 from capalith.store import Store, StoreError
-from tests.helpers import make_skill
+from tests.helpers import make_skill, open_descriptors
 from tests.test_intake import git, make_git_remote
 
 
@@ -408,14 +408,14 @@ class OnboardingTests(unittest.TestCase):
                         swap()
                     return original_mkdir(path, *args, **kwargs)
 
-                descriptors = set(os.listdir("/proc/self/fd"))
+                descriptors = open_descriptors()
                 with patch.dict(os.environ, {"XDG_DATA_HOME": str(data)}), \
                      patch("os.open", side_effect=open_at), \
                      patch("os.mkdir", side_effect=mkdir_at):
                     with self.assertRaises((OSError, StoreError)):
                         prepare_catalog([selected])
                 self.assertTrue(swapped)
-                self.assertEqual(descriptors, set(os.listdir("/proc/self/fd")))
+                self.assertEqual(descriptors, open_descriptors())
                 self.assertEqual(paths, sorted(p.relative_to(bundle) for p in bundle.rglob("*")))
                 self.assertEqual(before, hash_bundle(bundle))
 

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,3 +30,9 @@ def current_artifact(
         str(artifact["current_digest"]),
         resource_path,
     )
+
+
+def open_descriptors() -> set[str]:
+    """The descriptors this process holds, as names: /proc/self/fd on Linux, /dev/fd on macOS (which has no /proc)."""
+    folder = "/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd"
+    return set(os.listdir(folder))
