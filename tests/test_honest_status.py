@@ -22,7 +22,9 @@ import anyio
 from mcp import ClientSession, StdioServerParameters, stdio_client
 
 from capalith import answer, mcp_server, semantic
-from capalith.settings import SettingsError, _validate_answer, defaults, load_settings
+from capalith.onboarding import prepare_catalog
+from capalith.settings import SettingsError, _merge, _validate_answer, defaults, load_settings
+from capalith.store import Store
 from tests.test_answer import CONFIG, FakeStore, candidate, result, skill
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -121,7 +123,7 @@ class WordsTests(unittest.TestCase):
         self.assertEqual("weak", body["status"])
         self.assertEqual("matched by meaning and your words 'task'", body["candidates"][0]["why"])
         self.assertNotIn("no word of yours", first)
-        self.assertIn("only in its body", first)
+        self.assertIn("only in its body or file names", first)
         # only a common word shared: the line says so, and the tag shows no word
         common = self.shaped([candidate("violin-tuning", similarity=0.8, words=("a",), name_hits=0, description_hits=1)], query="book a dentist appointment")
         self.assertEqual("weak", common["status"])
@@ -130,6 +132,21 @@ class WordsTests(unittest.TestCase):
         # nothing shared: close in meaning only
         none = self.shaped([candidate("pdf-filler", similarity=0.8, words=(), name_hits=0, description_hits=0)])
         self.assertIn("none of your words", none["_text"].splitlines()[0])
+
+    def test_a_word_found_only_in_a_resource_file_name_is_not_called_a_body_word(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory).resolve()
+            bundle = temp / "skills/neutral-skill"
+            (bundle / "references").mkdir(parents=True)
+            (bundle / "SKILL.md").write_text("---\nname: neutral-skill\ndescription: Handles plain things.\n---\n\n# Plain\n\nNothing special here.\n", encoding="utf-8")
+            (bundle / "references/saffron.txt").write_text("plain notes\n", encoding="utf-8")
+            with patch.dict(os.environ, {"XDG_DATA_HOME": str(temp / "data")}):
+                store = Store(prepare_catalog([temp / "skills"]), read_only=True)
+                shaped = answer.shape(store, store.discover("saffron"), "short")
+            first = shaped["_text"].splitlines()[0]
+            self.assertEqual("weak", shaped["status"])
+            self.assertIn("file names", first)
+            self.assertNotIn("only the skill's body mentions", first)
 
     def test_the_weak_wording_is_a_setting_with_a_shipped_default_and_is_checked(self):
         signals = defaults()["answer"]["signals"]
@@ -222,6 +239,16 @@ class ErrorTests(unittest.TestCase):
                 self.assertEqual(1, result.returncode)
                 self.assertEqual(line, result.stderr)
                 self.assertEqual(b"", result.stdout)
+
+    def test_a_rejected_key_with_a_control_character_is_shown_escaped_on_one_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.start(Path(directory).resolve(), '"bogus\\nFORGED" = "SYNTHETIC_VALUE"\n')
+            self.assertEqual(1, result.returncode)
+            self.assertEqual(b"settings_error: unknown key bogus\\x0aFORGED\n", result.stderr)
+            self.assertNotIn(b"SYNTHETIC_VALUE", result.stderr)
+        with self.assertRaises(SettingsError) as raised:   # the same text a running server's call gets
+            _merge({"known": 1}, {"bad\u202ekey\n": 1})
+        self.assertEqual("settings_error: unknown key bad\\u202ekey\\x0a", str(raised.exception))
 
     def test_a_setup_failure_that_is_not_the_settings_still_says_what_it_said_before(self):
         with tempfile.TemporaryDirectory() as directory:

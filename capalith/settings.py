@@ -186,7 +186,7 @@ def _merge(target: dict, supplied: dict, prefix: str = "") -> None:
             target[key] = value
             continue
         if key not in target:
-            raise SettingsError(f"settings_error: unknown key {address}")
+            raise SettingsError(f"settings_error: unknown key {visible(address)}")
         current = target[key]
         if address == "semantic.model.files":
             if type(value) is not dict or not value:
