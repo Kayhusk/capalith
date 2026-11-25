@@ -57,7 +57,7 @@ jobs:
   macos:
     name: "macOS arm64, CPython ${{ matrix.python }}"
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -73,6 +73,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m pip install --require-hashes -r ${{ matrix.lock }}
       - run: PYTHONWARNINGS=error python -m unittest discover -s tests -v
+      # TEMPORARY, branch capalith-mac-diag only, never main: why one of two servers started together sometimes exits 1.
+      - name: Diagnostic, two servers' first start repeated
+        continue-on-error: true
+        run: python tools/diag_two_servers.py 200 3 3
 
   wsl:
     name: "Windows with WSL2, Ubuntu 24.04 (not yet proven)"
