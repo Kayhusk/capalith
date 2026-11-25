@@ -1,0 +1,21 @@
+name: Idea or request
+description: Suggest a change or a new capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the task and what gets in the way today. Start from the need, not from the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like instead?
+      description: Your suggestion, if you have one. Other ways you thought about are welcome too.
+  - type: textarea
+    id: who
+    attributes:
+      label: Who else would use it?
+      description: Optional. How often would it matter, and for whom?

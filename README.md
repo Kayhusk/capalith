@@ -4,6 +4,12 @@
 
 # Capalith
 
+**Capalith helps your coding agent find the right skill for a task.** It indexes the Agent Skills (folders with a `SKILL.md`) on your machine and answers over MCP with ranked matches and where to read them. Search runs locally; AI ranking is optional and off by default.
+
+It is for people who use Claude Code, Codex or another MCP client and keep a folder of skills. Alpha software; Linux x86_64 with Python 3.11 is the supported platform.
+
+Install: `uv tool install --python 3.11 https://github.com/Kayhusk/capalith/releases/download/v0.2.1/capalith-0.2.1-py3-none-any.whl`, then `capalith-model provision`, then connect your agent. The [full steps](#full-installation) say what each one does.
+
 Capalith is a local-first catalog for portable agent skills. It indexes each skill with its supporting files from local directories or Git branches and tags. Search returns ranked matches, declared relationships, and the IDs a host needs to read a selected skill.
 
 Capalith provides:
@@ -24,7 +30,7 @@ Supported: Linux on x86_64 with Python 3.11 and SQLite FTS5. Git is needed only 
 
 ### Full installation
 
-Linux on x86_64 with Python 3.11 (uv fetches it for you). The test suite passes in CI on WSL2; a real Windows host is untested and unsupported. If you use WSL2, keep your skill folders and Capalith's files on the Linux side of WSL2. Plan for about 300 MB of disk: on a test machine the program and its libraries took 236 MB and the default search model about 67 MB.
+Linux on x86_64 with Python 3.11 (uv fetches it for you). The test suite passes in CI on WSL2; a real Windows host is untested and unsupported. If you use WSL2, keep your skill folders and Capalith's files on the Linux side of WSL2. Plan for about 300 MB of disk, plus about 100 MB if uv also installs Python for you: on a test machine the program and its libraries took 236 MB, the default search model about 67 MB, and uv's Python 3.11 about 96 MB (`du` of its folder on a clean home).
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you don't have it: `curl -LsSf https://astral.sh/uv/install.sh | sh` (it prints how to put uv on your PATH; open a new terminal afterwards, or run what it prints)
 2. Install Capalith from its release wheel:
@@ -350,6 +356,13 @@ Only enabled sources are searched. Newer registrations win name collisions by de
 Capalith does not install itself into an agent host. It catalogs, ranks and retrieves skills; it does not install, activate, execute, change, synchronize, sign, or publish them. The current release has no background service, user interface, general-purpose graph API or built-in host credential adapter. Git sources do not support embedded credentials, SSH, proxies, custom certificates, submodules, or LFS.
 
 Dependency, model, and license records are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [DEPENDENCIES.json](DEPENDENCIES.json).
+
+## Contributing, bugs and security
+
+- A bug or an idea: [open an issue](https://github.com/Kayhusk/capalith/issues/new/choose); the forms ask for what we need.
+- A change: read [CONTRIBUTING.md](CONTRIBUTING.md) first; it has the setup and the exact test command.
+- A security problem: don't open an issue; follow [SECURITY.md](SECURITY.md).
+- Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
