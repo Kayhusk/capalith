@@ -12,41 +12,44 @@ import yaml
 
 from capalith.intake import scan_git_source, scan_local_source
 from capalith.store import Store, StoreError
+from capalith.settings import load_settings, settings_operation
 
 
+@settings_operation
 def discover_sources(
     workspace: Path | None = None, host_homes: dict[str, Path] | None = None,
-    extra_paths: Sequence[Path] = (),
+    extra_paths: Sequence[Path] | None = None,
 ) -> dict[str, object]:
     """Probe host skill locations, not the disk or other Hermes profiles."""
-    home = Path.home()
+    config = load_settings()["sources"]
     homes = {
-        host: Path((host_homes or {}).get(host) or os.environ.get(variable) or home / f".{host}").expanduser()
-        for host, variable in (("hermes", "HERMES_HOME"), ("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME"))
+        host: Path((host_homes or {}).get(host) or os.environ.get(values["home_env"]) or values["home_default"]).expanduser()
+        for host, values in config["hosts"].items()
     }
-    hermes, claude, codex = homes["hermes"], homes["claude"], homes["codex"]
-    current = (workspace or Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd())).expanduser().resolve(strict=True)
+    hermes = homes["hermes"]
+    current = (workspace or Path(os.environ.get(config["workspace_env"]) or Path.cwd())).expanduser().resolve(strict=True)
     candidates: list[tuple[Path, str]] = []
     warnings: list[str] = []
     repository = next((p for p in (current, *current.parents) if (p / ".git").exists()), None)
     directory = current
     while True:
-        candidates.extend([(directory / ".agents/skills", "workspace:agents"),
-                           (directory / ".claude/skills", "workspace:claude")])
+        candidates.extend((directory / path, "workspace:agents") for path in config["shared_project_dirs"])
+        for host in ("claude", "codex"):
+            candidates.extend((directory / path, f"workspace:{host}") for path in config["hosts"][host]["project_dirs"])
         if repository is None or directory == repository:
             break
         directory = directory.parent
     if repository is not None:
-        candidates.append((repository / ".hermes/skills", "workspace:hermes"))
-    candidates.extend([(home / ".agents/skills", "user:agents"),
-                       (codex / "skills", "user:codex-legacy"),
-                       (claude / "skills", "user:claude"), (hermes / "skills", "profile:hermes")])
-    config = hermes / "config.yaml"
+        candidates.extend((repository / path, "workspace:hermes") for path in config["hosts"]["hermes"]["project_dirs"])
+    candidates.extend((Path(path).expanduser(), "user:agents") for path in config["shared_user_dirs"])
+    for host, origin in (("codex", "user:codex-legacy"), ("claude", "user:claude"), ("hermes", "profile:hermes")):
+        candidates.extend((homes[host] / path, origin) for path in config["hosts"][host]["user_dirs"])
+    hermes_config = hermes / "config.yaml"
     try:
         # Read only skill-location settings, never credentials or other profiles.
-        parent = Store(config)._open_parent()
+        parent = Store(hermes_config)._open_parent()
         try:
-            descriptor = os.open(config.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+            descriptor = os.open(hermes_config.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                  dir_fd=parent)
         finally:
             os.close(parent)
@@ -54,8 +57,8 @@ def discover_sources(
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 raise ValueError("configuration must be a regular file")
             # ponytail: bounded config read; raise explicitly if larger configs are needed.
-            data = stream.read(1024 * 1024 + 1)
-            if len(data) > 1024 * 1024:
+            data = stream.read(config["hermes_config_max_bytes"] + 1)
+            if len(data) > config["hermes_config_max_bytes"]:
                 raise ValueError("configuration too large")
         settings = yaml.safe_load(data) or {}
         skills = settings.get("skills", {})
@@ -75,7 +78,8 @@ def discover_sources(
         pass
     except (OSError, ValueError, AttributeError, yaml.YAMLError):
         warnings.append("hermes_config_unavailable")
-    candidates.extend((path, "extra") for path in extra_paths)
+    additions = (Path(path).expanduser() for path in config["extra"]) if extra_paths is None else extra_paths
+    candidates.extend((path, "extra") for path in additions)
     sources: dict[Path, dict[str, object]] = {}
     for supplied, origin in candidates:
         try:
@@ -113,18 +117,24 @@ def discover_sources(
         except (OSError, ValueError, RuntimeError):
             warnings.append(f"source_unavailable:{origin}")
     return {"sources": list(sources.values()), "warnings": sorted(set(warnings)),
+            "searched": list(dict.fromkeys(str(path) for path, _ in candidates)),
             "workspace": str(current), "host_homes": {host: str(path) for host, path in homes.items()},
             "scope": "host_directories_not_active_host_inventory"}
 
 
+@settings_operation
 def prepare_catalog(
     roots: Sequence[Path] = (), git_sources: Sequence[Sequence[str]] = (),
 ) -> Path:
     """Prepare only explicitly selected sources before serving read-only calls."""
-    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
-    if not data_home.is_absolute():
-        raise StoreError("XDG_DATA_HOME must be an absolute path")
-    catalogs = data_home / "capalith" / "catalogs"
+    configured = load_settings()["storage"]["data_dir"]
+    if configured:
+        catalogs = Path(configured).expanduser()
+    else:
+        data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+        if not data_home.is_absolute():
+            raise StoreError("XDG_DATA_HOME must be an absolute path")
+        catalogs = data_home / "capalith" / "catalogs"
     validator = Store(catalogs / "catalog.sqlite3")
     selected: list[tuple[str, str, str | None]] = [
         ("local", str(validator.validate_local_source(root.expanduser())), None)

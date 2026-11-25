@@ -2,6 +2,7 @@ import hashlib
 import os
 import shutil
 import sqlite3
+from contextlib import closing
 import subprocess
 import tempfile
 import unittest
@@ -214,7 +215,7 @@ class IntakeTests(unittest.TestCase):
             git("-C", work, "commit", "-m", "change skill")
             commit_b = git("-C", work, "rev-parse", "HEAD").stdout.strip().decode()
             git("-C", work, "push", "origin", "refs/heads/main:refs/heads/main")
-            with sqlite3.connect(store.path) as connection:
+            with closing(sqlite3.connect(store.path)) as connection, connection:
                 connection.execute(
                     "CREATE TRIGGER fail_git_publication "
                     "BEFORE INSERT ON artifact_git_revisions "
@@ -226,7 +227,7 @@ class IntakeTests(unittest.TestCase):
 
             self.assertEqual(before_list, store.list_artifacts())
             self.assertEqual(before, current_artifact(store, identifier))
-            with sqlite3.connect(store.path) as connection:
+            with closing(sqlite3.connect(store.path)) as connection, connection:
                 connection.execute("DROP TRIGGER fail_git_publication")
 
             second_result, second_revision = scan_git_source(store, source.id)

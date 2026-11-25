@@ -76,7 +76,8 @@ class MCPServerTests(unittest.TestCase):
                             self.assertEqual({"type": "object"}, tool.output_schema)
                             assert tool.annotations is not None
                             self.assertEqual(
-                                {"readOnlyHint": True, "openWorldHint": False},
+                                ({"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}
+                                 if tool.name == "discover" else {"readOnlyHint": True, "openWorldHint": False}),
                                 tool.annotations.model_dump(by_alias=True, exclude_none=True),
                             )
                         self.assertEqual(["query"], tools["discover"].input_schema["required"])
@@ -91,7 +92,7 @@ class MCPServerTests(unittest.TestCase):
                         requests = (
                             (
                                 "discover",
-                                {"query": "mcp", "source_ids": [source.id], "limit": 1},
+                                {"query": "mcp", "source_ids": [source.id], "limit": 1, "detail": "full"},
                                 store.discover("mcp", source_ids=(source.id,), limit=1),
                             ),
                             (

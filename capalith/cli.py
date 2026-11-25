@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence, TextIO
 
+from capalith import __version__
 from capalith.catalog import CatalogError
 from capalith.identity import BundleEntryError
 from capalith.intake import review_git_source, scan_git_source, scan_local_source
 from capalith.store import Source, Store, StoreError
+from capalith.settings import SettingsError, load_settings
 
 
 _SOURCE_USAGE = (
@@ -85,6 +88,7 @@ def _configuration_report(database: Path | None) -> dict[str, object]:
             "automatic_refresh": "unavailable",
             "discovery": "operator_invoked",
             "source_scan": "operator_invoked",
+            "search_ranking": "configured_ai_with_free_fallback",
         },
         "host_integrations": {
             "installed": [],
@@ -102,6 +106,9 @@ def _configuration_report(database: Path | None) -> dict[str, object]:
             "relationship_traversal": "available",
             "source_currentness": "available",
             "source_intake": "available",
+        },
+        "security": {
+            "allow_call_sources": load_settings()["security"]["allow_call_sources"],
         },
         "authority_boundary": {
             "capalith": ["read_configured_sources", "write_owned_database"],
@@ -163,7 +170,9 @@ def main(
 
 REF must be refs/heads/NAME or refs/tags/NAME.""",
     )
+    parser.add_argument("--version", action="version", version=f"capalith {__version__}")
     parser.add_argument("--db", required=True, metavar="PATH", help="catalog database path")
+    parser.add_argument("--config", metavar="PATH", help="absolute user settings file")
     parser.add_argument(
         "--source-id",
         action="append",
@@ -198,7 +207,11 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
     parser.add_argument("arguments", nargs="*", help="arguments for the command")
     arguments = parser.parse_args(argv)
 
+    old_config = os.environ.get("CAPALITH_CONFIG")
+    if arguments.config:
+        os.environ["CAPALITH_CONFIG"] = arguments.config
     try:
+        load_settings()
         try:
             database = Path(arguments.db).resolve(strict=False)
         except RuntimeError as error:
@@ -245,7 +258,7 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
                     if arguments.source_ids is not None
                     else None
                 ),
-                limit=arguments.limit if arguments.limit is not None else 5,
+                limit=arguments.limit,
                 offset=arguments.offset,
                 view_id=arguments.view_id,
             )
@@ -265,7 +278,7 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
                 ),
                 direction=arguments.direction,
                 depth=arguments.depth,
-                limit=arguments.limit if arguments.limit is not None else 10,
+                limit=arguments.limit,
                 offset=arguments.offset,
                 view_id=arguments.view_id,
             )
@@ -281,12 +294,21 @@ REF must be refs/heads/NAME or refs/tags/NAME.""",
             )
         else:
             parser.error("invalid command arguments; run 'capalith --help' for command forms")
+    except SettingsError as error:
+        print(str(error), file=stderr)
+        return 2
     except sqlite3.Error:
         print("database operation failed", file=stderr)
         return 1
     except (BundleEntryError, CatalogError, StoreError, OSError) as error:
         print("\\n".join(str(error).splitlines()), file=stderr)
         return 1
+    finally:
+        if arguments.config:
+            if old_config is None:
+                os.environ.pop("CAPALITH_CONFIG", None)
+            else:
+                os.environ["CAPALITH_CONFIG"] = old_config
 
     stdout.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
     return 0

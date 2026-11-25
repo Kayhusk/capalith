@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import os
 import sqlite3
@@ -21,9 +22,12 @@ from pydantic import ValidationError
 
 from capalith import __version__
 from capalith.catalog import CatalogError
+from capalith import answer
 from capalith.cli import _configuration_report
 from capalith.onboarding import discover_sources, prepare_catalog
-from capalith.store import Store, StoreError
+from capalith.store import Store, StoreError, StoreSchemaNewer
+from capalith.settings import SettingsError, defaults, load_settings, settings_snapshot
+from capalith.textsafe import visible
 
 _DIGEST_PATTERN = "^sha256:[0-9a-f]{64}$"
 _RELATIONSHIP_TYPES = [
@@ -34,7 +38,14 @@ _RELATIONSHIP_TYPES = [
     "supersedes",
 ]
 _READ_ONLY = types.ToolAnnotations(read_only_hint=True, open_world_hint=False)
+_DISCOVER_ANNOTATIONS = types.ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
 _OUTPUT_SCHEMA = {"type": "object"}
+_WHEN_TO_CALL = (
+    "Find the skill for the task you are about to start. Call it once, before you begin any task that is "
+    "more than a single command, with the task in your own words. It returns up to 3 skills by default, each "
+    "with a one-line reason and the file to read; a result marked possible or weak is a candidate to check, "
+    "not a promise. It costs one call and a short answer. Don't call it to install a skill, or when your instructions already name the skill."
+)
 _INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "discover": {
         "type": "object",
@@ -43,7 +54,7 @@ _INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                 "type": "string",
                 "minLength": 1,
                 "pattern": "\\S",
-                "description": "Natural-language task to search for.",
+                "description": "Natural-language task to search for. With AI ranking enabled (the user's own TypeSafe key or a host-managed transport) the query and the skills' descriptions and excerpts are sent to that provider and a ranking-view cache is kept locally; otherwise search stays local. Never pass an API key as an argument.",
             },
             "source_ids": {
                 "type": "array",
@@ -54,8 +65,8 @@ _INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "limit": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 50,
-                "default": 5,
+                "maximum": defaults()["search"]["max_limit"],
+                "default": defaults()["search"]["default_limit"],
                 "description": "Maximum results per page.",
             },
             "offset": {
@@ -63,6 +74,11 @@ _INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                 "minimum": 0,
                 "default": 0,
                 "description": "Number of results to skip.",
+            },
+            "detail": {
+                "type": "string",
+                "enum": ["short", "full"],
+                "description": "short: a few lines per skill with where to read it. full: the complete record with ids and digests.",
             },
             "view_id": {
                 "anyOf": [
@@ -171,10 +187,10 @@ _TOOLS = [
         description=description,
         input_schema=_INPUT_SCHEMAS[name],
         output_schema=_OUTPUT_SCHEMA,
-        annotations=_READ_ONLY,
+        annotations=_DISCOVER_ANNOTATIONS if name == "discover" else _READ_ONLY,
     )
     for name, description in (
-        ("discover", "Search the latest scanned Agent Skills for a task description."),
+        ("discover", _WHEN_TO_CALL),
         ("inspect", "Return stored metadata, a resource list, or one resource for an artifact version."),
         ("traverse", "Return declared relationships for an artifact version."),
         ("config_show", "Return configured sources, source states, and Capalith features."),
@@ -205,13 +221,13 @@ _INDEX_TOOL = types.Tool(
                                "Cannot be combined with source_paths, which selects only explicit roots.",
             },
             "workspace": {"type": "string", "minLength": 1,
-                          "description": "Absolute task workspace; falls back to CLAUDE_PROJECT_DIR, then server cwd."},
+                          "description": "Absolute task workspace, when it differs from the server's own; falls back to CLAUDE_PROJECT_DIR, then server cwd. The first search prepares the catalog from it and the host skill folders; index_skills refreshes it."},
             "host_homes": {
                 "type": "object",
                 "properties": {host: {"type": "string", "minLength": 1}
                                for host in ("hermes", "claude", "codex")},
                 "additionalProperties": False,
-                "description": "Known absolute host config homes, not installation or skill paths. "
+                "description": "Known absolute host config homes (task/profile context when it differs from the server), not installation or skill paths. "
                                "Overrides filtered environment values; omitted keys use the server environment.",
             },
         },
@@ -224,19 +240,13 @@ _INDEX_TOOL = types.Tool(
 )
 _AUTO_DISCOVER_TOOL = types.Tool(
     name="discover",
-    description=(
-        "Search Agent Skills by task, including known skills and declared relationships. "
-        "The first search prepares a local catalog from supported host skill directories. "
-        "workspace and host_homes select task/profile context when it differs from the server. "
-        "Repeated searches read the snapshot; index_skills explicitly refreshes it. "
-        "Writes only Capalith's catalog, never sources or host settings; does not load or activate skills."
-    ),
+    description=_WHEN_TO_CALL,
     input_schema={
         **_INPUT_SCHEMAS["discover"],
         "properties": {**_INPUT_SCHEMAS["discover"]["properties"], **_INDEX_TOOL.input_schema["properties"]},
     },
     output_schema=_OUTPUT_SCHEMA,
-    annotations=_INDEX_TOOL.annotations,
+    annotations=_DISCOVER_ANNOTATIONS,
 )
 _CATALOG_CODES = {
     "artifact_not_found",
@@ -249,11 +259,21 @@ _CATALOG_CODES = {
 
 
 def _success(value: dict[str, object]) -> types.CallToolResult:
-    text = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    # A short discover answer carries its plain-text form for the host (see capalith.answer).
+    text = value.pop("_text", None) or json.dumps(value, sort_keys=True, separators=(",", ":"))
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
         structured_content=value,
     )
+
+
+def _no_sources_text(searched: Sequence[str] | None, shown: int = 8) -> str:
+    """Where the first search looked (from the configured hosts, not a fixed list) and what to do."""
+    if not searched:
+        return "no_skill_sources: No skill folders were given. Pass at least one absolute folder, or leave source_paths out."
+    places = ", ".join(visible(path) for path in searched[:shown]) + (f" and {len(searched) - shown} more" if len(searched) > shown else "")
+    return ("no_skill_sources: No skill folders found. Capalith looked in " + places + ". "
+            "Put a skill (a folder with a SKILL.md) in one of them, or start the server with `--extra-source /absolute/path`.")
 
 
 def _failure(code: str) -> types.CallToolResult:
@@ -274,7 +294,12 @@ def _store_call(database: Path, name: str, arguments: dict[str, Any]) -> dict[st
     if "relationship_types" in values:
         values["relationship_types"] = tuple(values["relationship_types"])
     if name == "discover":
-        return store.discover(**values)
+        detail = values.pop("detail", None)
+        settings = load_settings()
+        if (detail or settings["answer"]["detail"]) == "short" and "limit" not in values:
+            # The short answer is a short page; an explicit limit and the full record keep today's default.
+            values["limit"] = min(settings["answer"]["default_limit"], settings["search"]["default_limit"])
+        return answer.shape(store, store.discover(**values), detail, values.get("source_ids"))
     if name == "inspect":
         return store.get_artifact(**values)
     return store.traverse(**values)
@@ -292,9 +317,22 @@ def create_server(
     selected_paths: list[Path] | None = None
     selected_workspace: Path | None = None
     selected_homes: dict[str, Path] = {}
-    selected_extras = list(extra_paths)
+    selected_extras = list(extra_paths) if extra_paths else None
+    selected_source_config: str | None = None
     setup_attempted = False
-    tools = [_AUTO_DISCOVER_TOOL, *_TOOLS[1:], _INDEX_TOOL] if agent_managed else _TOOLS
+    tools = deepcopy([_AUTO_DISCOVER_TOOL, *_TOOLS[1:], _INDEX_TOOL] if agent_managed else _TOOLS)
+    try:
+        config = load_settings()
+    except SettingsError:
+        config = defaults()
+    for tool in tools:
+        if tool.name in ("discover", "traverse"):
+            limits = config["search" if tool.name == "discover" else "traversal"]
+            tool.input_schema["properties"]["limit"].update(default=limits["default_limit"], maximum=limits["max_limit"])
+            if tool.name == "discover" and config["answer"]["detail"] == "short":
+                tool.input_schema["properties"]["limit"]["default"] = min(config["answer"]["default_limit"], limits["default_limit"])
+            if tool.name == "traverse":
+                tool.input_schema["properties"]["depth"]["maximum"] = limits["max_depth"]
     validators = {tool.name: Draft202012Validator(tool.input_schema) for tool in tools}
     bundle = files("capalith").joinpath("skills/capalith")
     guides = {
@@ -324,19 +362,33 @@ def create_server(
     ) -> types.ListToolsResult:
         return types.ListToolsResult(tools=tools)
 
-    async def call_tool(
+    async def perform_call(
         _context: object, params: types.CallToolRequestParams
     ) -> types.CallToolResult:
-        nonlocal database, selected_paths, selected_workspace, selected_homes, selected_extras, setup_attempted
+        nonlocal database, selected_paths, selected_workspace, selected_homes, selected_extras, selected_source_config, setup_attempted
         name = params.name
         if name not in validators:
             raise MCPError(types.METHOD_NOT_FOUND, "Unknown tool")
         try:
-            arguments = params.arguments or {}
+            config = load_settings()
+            arguments = dict(params.arguments or {})
             errors = list(validators[name].iter_errors(arguments))
             if errors:
                 return _failure("invalid_request")
             async with catalog_lock:
+                if agent_managed:
+                    source_config = json.dumps({
+                        "sources": config["sources"], "data_dir": config["storage"]["data_dir"],
+                        "allow_call_sources": config["security"]["allow_call_sources"],
+                    }, sort_keys=True)
+                    if source_config != selected_source_config:
+                        selected_workspace, selected_paths, selected_homes = None, None, {}
+                        selected_extras = list(extra_paths) if extra_paths else None
+                        database, setup_attempted = None, False
+                        selected_source_config = source_config
+                    if not config["security"]["allow_call_sources"]:
+                        arguments = {key: value for key, value in arguments.items()
+                                     if key not in _INDEX_TOOL.input_schema["properties"]}
                 if agent_managed and name in ("index_skills", "discover"):
                     # Keep cross-field validation here: some hosts rewrite JSON Schema `not` clauses.
                     if "source_paths" in arguments and "extra_source_paths" in arguments:
@@ -351,7 +403,7 @@ def create_server(
                         roots = [Path(p) for p in arguments["source_paths"]]
                     if (workspace is not None and not workspace.is_absolute()) or (
                         roots is not None and any(not root.is_absolute() for root in roots)
-                    ) or any(not path.is_absolute() for path in [*homes.values(), *extras]):
+                    ) or any(not path.is_absolute() for path in [*homes.values(), *(extras or [])]):
                         return _failure("invalid_request")
                     changed = (workspace, roots, homes, extras) != (selected_workspace, selected_paths, selected_homes, selected_extras)
                     if name == "index_skills" or changed or not setup_attempted:
@@ -359,6 +411,7 @@ def create_server(
                         selected_extras = extras
                         database = None
                         setup_attempted = True
+                        searched = None
                         try:
                             if roots is None:
                                 discovery = await run_sync(lambda: discover_sources(selected_workspace, selected_homes, selected_extras))
@@ -366,12 +419,15 @@ def create_server(
                                 assert isinstance(warnings, list)
                                 if "source_unavailable:extra" in warnings:
                                     return _failure("catalog_setup_failed")
+                                searched = discovery["searched"]
                                 discovered = discovery["sources"]
                                 assert isinstance(discovered, list)
                                 roots = [Path(s["path"]) for s in discovered]
                             if not roots:
-                                return _failure("no_skill_sources")
+                                return _failure(_no_sources_text(searched))
                             database = await run_sync(lambda: prepare_catalog(roots))
+                        except StoreSchemaNewer as error:
+                            return _failure(str(error))        # fixed text, two numbers: the cause is safe to tell
                         except Exception:
                             return _failure("catalog_setup_failed")
                     if name == "index_skills":
@@ -417,6 +473,10 @@ def create_server(
                 assert isinstance(capabilities, dict)
                 capabilities["automatic_refresh"] = "server_startup"
             return _success(value)
+        except SettingsError as error:
+            return _failure(str(error))
+        except StoreSchemaNewer as error:
+            return _failure(str(error))
         except StoreError as error:
             code = str(error).partition(":")[0]
             return _failure(code if code in _CATALOG_CODES else "internal_error")
@@ -430,6 +490,15 @@ def create_server(
             )
         except Exception:
             return _failure("internal_error")
+
+    async def call_tool(
+        _context: object, params: types.CallToolRequestParams
+    ) -> types.CallToolResult:
+        try:
+            with settings_snapshot():
+                return await perform_call(_context, params)
+        except SettingsError as error:
+            return _failure(str(error))
 
     server = Server(
         "capalith",
@@ -488,9 +557,11 @@ async def _serve(database: Path | None, managed: bool = False, extra_paths: Sequ
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="capalith-mcp",
-        description="Skill search with first-use catalog setup over stdio; --db keeps tools read-only.",
+        description="Skill search with first-use catalog setup over stdio; --db keeps the catalog read-only, while discover may write its ranking cache.",
     )
+    parser.add_argument("--version", action="version", version=f"capalith-mcp {__version__}")
     parser.add_argument("--db", type=Path, metavar="PATH", help="existing database; no setup or refresh")
+    parser.add_argument("--config", metavar="PATH", help="absolute user settings file")
     parser.add_argument(
         "--source", type=Path, action="append", metavar="ROOT",
         help="skill directory to index at startup; repeat in priority order",
@@ -504,6 +575,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="add an absolute skill directory alongside host defaults; repeat in priority order",
     )
     arguments = parser.parse_args(argv)
+    if arguments.config:
+        os.environ["CAPALITH_CONFIG"] = arguments.config
     managed = bool(arguments.source or arguments.git)
     if arguments.db and managed:
         parser.error("--db cannot be combined with --source/--git")
@@ -515,6 +588,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if managed:
             try:
                 database = prepare_catalog(arguments.source or (), arguments.git or ())
+            except StoreSchemaNewer as error:
+                print(str(error), file=sys.stderr)
+                return 1
             except Exception:
                 print(
                     "catalog_setup_failed: check selected source paths, Git URL/ref, "

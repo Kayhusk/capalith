@@ -9,6 +9,11 @@ import re
 import sqlite3
 import unicodedata
 import uuid
+import atexit
+from collections import OrderedDict
+from contextlib import contextmanager
+import sys
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,9 +21,11 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from capalith import semantic
+from capalith.settings import defaults, load_settings, settings_operation
 from capalith.catalog import (
     CATALOG_FORMAT_VERSION,
     CatalogObservation,
+    DiscoveryEntries,
     build_discovery,
     fts_query,
     query_tokens,
@@ -26,13 +33,12 @@ from capalith.catalog import (
 )
 from capalith.identity import BundleManifest, artifact_id
 
-SCHEMA_VERSION = 7
-_DISCOVERY_LIMIT = 5
-_DISCOVERY_MAX_LIMIT = 50
-_LEXICAL_MATCH_LIMIT = 1000
-_TRAVERSAL_LIMIT = 10
-_TRAVERSAL_MAX_LIMIT = 100
-_TRAVERSAL_MAX_DEPTH = 3
+SCHEMA_VERSION = 8
+_DISCOVERY_LIMIT = defaults()["search"]["default_limit"]
+_DISCOVERY_MAX_LIMIT = defaults()["search"]["max_limit"]
+_TRAVERSAL_LIMIT = defaults()["traversal"]["default_limit"]
+_TRAVERSAL_MAX_LIMIT = defaults()["traversal"]["max_limit"]
+_TRAVERSAL_MAX_DEPTH = defaults()["traversal"]["max_depth"]
 _RELATIONSHIP_TYPES = (
     "requires",
     "complements",
@@ -40,7 +46,7 @@ _RELATIONSHIP_TYPES = (
     "conflicts",
     "supersedes",
 )
-_RRF_RANK_CONSTANT = 60
+_RRF_RANK_CONSTANT = defaults()["search"]["rrf_k"]
 _DIRECTORY_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
 
 _SCHEMA = (
@@ -166,8 +172,8 @@ _CATALOG_SCHEMA = (
         catalog_format_version INTEGER NOT NULL,
         model_key TEXT NOT NULL,
         projection_digest TEXT NOT NULL CHECK(length(projection_digest)=64),
-        dimensions INTEGER NOT NULL CHECK(dimensions=384),
-        vector BLOB NOT NULL CHECK(typeof(vector)='blob' AND length(vector)=1536),
+        dimensions INTEGER NOT NULL CHECK(dimensions>=1),
+        vector BLOB NOT NULL CHECK(typeof(vector)='blob' AND length(vector)=dimensions*4),
         PRIMARY KEY(artifact_id,content_digest,catalog_format_version,model_key),
         FOREIGN KEY(artifact_id,content_digest,catalog_format_version)
             REFERENCES catalog_entries(
@@ -246,6 +252,62 @@ def _semantic_document_vectors(
     }
 
 
+class _OrderKeys:
+    """The integer sort keys of a list of catalog rows, built once per catalog snapshot.
+
+    A string's rank among the sorted strings orders exactly as the string does, so sorting these integers with
+    numpy.lexsort gives the same order as sorting the (flag, ..., name, artifact id) tuples, without a Python key
+    call per row. Artifact ids are unique, so no two rows tie on every key.
+    """
+
+    def __init__(self, rows) -> None:
+        import numpy
+
+        self.names = [str(row["name"]) for row in rows]
+        self.artifacts = [str(row["artifact_id"]) for row in rows]
+        self.priority = numpy.array([int(str(row["source_priority"])) for row in rows], dtype=numpy.int64)
+        self.sorted_names = sorted(set(self.names))
+        name_order = {name: rank for rank, name in enumerate(self.sorted_names)}
+        self.name_rank = numpy.array([name_order[name] for name in self.names], dtype=numpy.int64)
+        artifact_order = {artifact: rank for rank, artifact in enumerate(sorted(self.artifacts))}
+        self.artifact_rank = numpy.array([artifact_order[artifact] for artifact in self.artifacts], dtype=numpy.int64)
+        self.index = {artifact: position for position, artifact in enumerate(self.artifacts)}
+
+    def flags(self, exact_names):
+        """0 for a row whose name is an exact name for the query, else 1 (the first sort key)."""
+        import bisect
+
+        import numpy
+
+        flags = numpy.ones(len(self.names), dtype=numpy.int8)
+        for name in exact_names:
+            place = bisect.bisect_left(self.sorted_names, name)
+            if place < len(self.sorted_names) and self.sorted_names[place] == name:
+                flags[self.name_rank == place] = 0
+        return flags
+
+    @property
+    def nbytes(self) -> int:
+        return int(sum(array.nbytes for array in (self.priority, self.name_rank, self.artifact_rank)))
+
+
+def _rank_denominators(rrf_k, count):
+    """`rrf_k + rank` for ranks 1..count as float64, exactly what Python's `weight / (rrf_k + rank)` divides by.
+
+    numpy integer addition wraps past 2**63 and rounds twice above 2**53, so a very large accepted rrf_k is added in Python integers.
+    """
+    import numpy
+
+    if type(rrf_k) is int and rrf_k + count >= 2**53:
+        return numpy.array([float(rrf_k + rank) for rank in range(1, count + 1)], dtype=numpy.float64)
+    return rrf_k + numpy.arange(1, count + 1)
+
+
+def _word_row(row) -> dict[str, object]:
+    """A word-search result row as the page code reads it (by column name)."""
+    return {"artifact_id": row[0], "content_digest": row[1], "path_key": row[2], "rank": row[3]}
+
+
 def _semantic_query_vector(query: str) -> bytes | None:
     try:
         return semantic.embed_query(query)
@@ -255,6 +317,17 @@ def _semantic_query_vector(query: str) -> bytes | None:
 
 class StoreError(Exception):
     pass
+
+
+class StoreSchemaNewer(StoreError):
+    """The catalog was written by a newer Capalith. The one setup error whose cause is told to the caller: its text is
+    fixed and holds two numbers, no path, source or setting."""
+
+    def __init__(self, version: int) -> None:
+        super().__init__(
+            f"catalog_newer: this catalog was written by a newer Capalith (catalog format {version}; "
+            f"this version reads up to {SCHEMA_VERSION}). Upgrade Capalith, or point at another catalog."
+        )
 
 
 def _page_request(
@@ -275,7 +348,9 @@ def _page_request(
     ):
         raise StoreError("invalid_request: malformed view_id")
     if offset and view_id is None:
-        raise StoreError("invalid_request: view_id is required when offset is greater than 0")
+        raise StoreError(
+            "invalid_request: view_id is required when offset is greater than 0"
+        )
     return limit, offset, view_id
 
 
@@ -326,9 +401,44 @@ def _semantic_state(
             f"WHERE a.source_id IN ({placeholders}) AND a.present=1 "
             "AND v.catalog_format_version=? AND v.model_key=? "
             "ORDER BY v.artifact_id,v.content_digest",
-            (*source_ids, CATALOG_FORMAT_VERSION, semantic.MODEL_KEY),
+            (*source_ids, CATALOG_FORMAT_VERSION, semantic.model_key()),
         )
     ]
+
+
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _macos_folder_path(descriptor: int) -> str:
+    """macOS has no /proc: the open folder's current path, from F_GETPATH."""
+    import fcntl
+
+    raw = fcntl.fcntl(descriptor, fcntl.F_GETPATH, bytes(1024))
+    return os.fsdecode(raw.split(b"\0", 1)[0])
+
+
+# The one call that differs on macOS; tests answer it from /proc to run the macOS branch on Linux.
+_folder_path = _macos_folder_path
+
+
+def _confirm_folder(folder: str, parent_descriptor: int) -> None:
+    """macOS only: SQLite opened by path, so check that the path still leads to the folder we hold.
+
+    EXPERIMENTAL AND UNSUPPORTED on macOS; no Mac has run this. The file itself is checked by the checks that
+    follow in _connect (the name inside the held folder must still be the file held).
+
+    Linux needs none of this: /proc/self/fd/<n> is the held folder itself, so nothing can be swapped under it.
+    Here the guarantee is weaker, and only this much: a PERSISTENT swap (the path still leads elsewhere when
+    these checks run) is caught. NOT caught: a swap during SQLite's open that is restored before these checks
+    (the connection then reads the other database while every check passes: tests/test_macos_anchor.py keeps
+    that case, as a known limit and not as protection); a swap after the checks; and the journal, WAL and
+    shared-memory files SQLite opens later by the same path.
+    """
+    held = os.fstat(parent_descriptor)
+    now = os.stat(folder)
+    if (now.st_dev, now.st_ino) != (held.st_dev, held.st_ino) or _folder_path(parent_descriptor) != folder:
+        raise StoreError("database folder changed while being opened")
 
 
 class _AnchoredConnection(sqlite3.Connection):
@@ -357,9 +467,96 @@ class _AnchoredConnection(sqlite3.Connection):
                 os.close(parent_descriptor)
 
 
-def _validate_relative_posix(
-    value: object, label: str, *, allow_root: bool
-) -> None:
+@dataclass
+class _SearchSession:
+    connection: sqlite3.Connection
+    identity: tuple[int, ...]
+    generation: int = -1
+    prepared: dict[str, Any] | None = None
+    byte_size: int = 0
+    sizing_pending: bool = False
+
+
+_search_lock = threading.RLock()
+_search_sessions: OrderedDict[tuple[str, bool], _SearchSession] = OrderedDict()
+
+
+def _prepared_size(value: object, seen: set[int]) -> int:
+    identity = id(value)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    size = sys.getsizeof(value)
+    if isinstance(value, semantic.VectorIndex):
+        return size + value.nbytes
+    if isinstance(value, (DiscoveryEntries, _OrderKeys)):
+        return size + _prepared_size(vars(value), seen)
+    if isinstance(value, dict):
+        return size + sum(
+            _prepared_size(k, seen) + _prepared_size(v, seen) for k, v in value.items()
+        )
+    if isinstance(value, (list, tuple, sqlite3.Row)):
+        return size + sum(_prepared_size(item, seen) for item in value)
+    return size
+
+
+def _close_search_sessions() -> None:
+    with _search_lock:
+        while _search_sessions:
+            _, session = _search_sessions.popitem(last=False)
+            session.connection.close()
+
+
+atexit.register(_close_search_sessions)
+
+
+@contextmanager
+def _search_connection(store: Store):
+    """Reuse native read transactions, invalidated by SQLite data_version.
+
+    Every call still performs the store's secure open and identity validation.
+    A single lock protects retained connections across worker threads; no read
+    transaction survives a search. Refreshes remain ordinary store writes.
+    """
+    config = load_settings()["search"]
+    with _search_lock:
+        fresh = store._connect(check_same_thread=False)
+        database = os.fstat(fresh._database_descriptor)
+        parent = os.fstat(fresh._parent_descriptor)
+        identity = (database.st_dev, database.st_ino, parent.st_dev, parent.st_ino)
+        key = (str(store.path), store.read_only)
+        session = _search_sessions.get(key)
+        if session is not None and session.identity != identity:
+            session.connection.close()
+            del _search_sessions[key]
+            session = None
+        if session is None:
+            session = _SearchSession(fresh, identity)
+            _search_sessions[key] = session
+        else:
+            fresh.close()
+            _search_sessions.move_to_end(key)
+            session.connection.execute(
+                f"PRAGMA busy_timeout={int(load_settings()['storage']['busy_timeout_seconds'] * 1000)}"
+            )
+        try:
+            yield session
+        finally:
+            if session.connection.in_transaction:
+                session.connection.execute("ROLLBACK")
+            if session.sizing_pending:
+                session.byte_size = _prepared_size(session.prepared, set())
+                session.sizing_pending = False
+            while _search_sessions and (
+                len(_search_sessions) > config["cached_catalogs"]
+                or sum(entry.byte_size for entry in _search_sessions.values())
+                > config["cache_max_bytes"]
+            ):
+                _, oldest = _search_sessions.popitem(last=False)
+                oldest.connection.close()
+
+
+def _validate_relative_posix(value: object, label: str, *, allow_root: bool) -> None:
     if type(value) is not str:
         raise StoreError(f"{label} must be a string")
     try:
@@ -432,7 +629,7 @@ class Store:
             os.close(descriptor)
             raise
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self, *, check_same_thread: bool = True) -> sqlite3.Connection:
         parent_descriptor: int | None = None
         database_descriptor: int | None = None
         connection: sqlite3.Connection | None = None
@@ -448,7 +645,9 @@ class Store:
             database_stat = os.fstat(database_descriptor)
             if database_stat.st_nlink > 1:
                 raise StoreError("database file cannot have multiple hard links")
-            target = f"/proc/self/fd/{parent_descriptor}/{self.path.name}"
+            by_path = _is_macos()
+            folder = _folder_path(parent_descriptor) if by_path else f"/proc/self/fd/{parent_descriptor}"
+            target = f"{folder}/{self.path.name}"
             if self.read_only:
                 target = f"file:{quote(target, safe='/')}?mode=ro"
             connection = sqlite3.connect(
@@ -456,8 +655,12 @@ class Store:
                 uri=self.read_only,
                 isolation_level=None,
                 factory=_AnchoredConnection,
+                check_same_thread=check_same_thread,
+                timeout=load_settings()["storage"]["busy_timeout_seconds"],
             )
             try:
+                if by_path:
+                    _confirm_folder(folder, parent_descriptor)
                 final_database_stat = os.fstat(database_descriptor)
                 if final_database_stat.st_nlink > 1:
                     raise StoreError("database file cannot have multiple hard links")
@@ -490,6 +693,8 @@ class Store:
                 connection.execute("PRAGMA foreign_keys=ON")
                 if self.read_only:
                     version = connection.execute("PRAGMA user_version").fetchone()[0]
+                    if version > SCHEMA_VERSION:
+                        raise StoreSchemaNewer(version)
                     if version != SCHEMA_VERSION:
                         raise sqlite3.DatabaseError("unsupported store schema version")
             except BaseException:
@@ -512,12 +717,16 @@ class Store:
         if supplied.is_symlink():
             raise StoreError(f"local source directory cannot be a symlink: {supplied}")
         if not supplied.exists() or not supplied.is_dir():
-            raise StoreError(f"local source directory must be an existing directory: {supplied}")
+            raise StoreError(
+                f"local source directory must be an existing directory: {supplied}"
+            )
         try:
             root = supplied.resolve(strict=True)
             database = self.path.resolve(strict=False)
         except OSError as error:
-            raise StoreError(f"could not resolve local source directory: {supplied}") from error
+            raise StoreError(
+                f"could not resolve local source directory: {supplied}"
+            ) from error
         if database == root or database.is_relative_to(root):
             raise StoreError("database must be outside the local source directory")
         return root
@@ -533,9 +742,7 @@ class Store:
                 or "#" in locator
                 or "\\" in locator
                 or any(character.isspace() for character in locator)
-                or any(
-                    unicodedata.category(character) == "Cc" for character in locator
-                )
+                or any(unicodedata.category(character) == "Cc" for character in locator)
                 or re.search(r"%(?![0-9A-Fa-f]{2})", locator)
             ):
                 raise ValueError
@@ -576,8 +783,7 @@ class Store:
                 or "@{" in requested_ref
                 or "\\" in requested_ref
                 or any(
-                    unicodedata.category(character) == "Cc"
-                    or character in " ~^:?*["
+                    unicodedata.category(character) == "Cc" or character in " ~^:?*["
                     for character in requested_ref
                 )
             ):
@@ -595,7 +801,9 @@ class Store:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if version == SCHEMA_VERSION:
                 return
-            if version not in (0, 1, 2, 3, 4, 5, 6):
+            if version > SCHEMA_VERSION:
+                raise StoreSchemaNewer(version)
+            if version not in (0, 1, 2, 3, 4, 5, 6, 7):
                 raise StoreError(f"unsupported store schema version: {version}")
             if version == 1:
                 connection.execute("PRAGMA foreign_keys=OFF")
@@ -609,16 +817,15 @@ class Store:
                 if version == SCHEMA_VERSION:
                     connection.execute("COMMIT")
                     return
-                if version not in (0, 1, 2, 3, 4, 5, 6):
+                if version > SCHEMA_VERSION:
+                    raise StoreSchemaNewer(version)
+                if version not in (0, 1, 2, 3, 4, 5, 6, 7):
                     raise StoreError("store schema changed during migration")
                 if version == 1:
                     connection.execute(
-                        "ALTER TABLE artifact_versions "
-                        "RENAME TO _artifact_versions_v1"
+                        "ALTER TABLE artifact_versions RENAME TO _artifact_versions_v1"
                     )
-                    connection.execute(
-                        "ALTER TABLE artifacts RENAME TO _artifacts_v1"
-                    )
+                    connection.execute("ALTER TABLE artifacts RENAME TO _artifacts_v1")
                     connection.execute("ALTER TABLE sources RENAME TO _sources_v1")
                     for statement in _SCHEMA:
                         connection.execute(statement)
@@ -657,15 +864,25 @@ class Store:
                     connection.execute(_SCHEMA[4])
                 if version in (2, 3, 4, 5, 6):
                     connection.execute(_SCHEMA[5])
-                connection.execute(
-                    "INSERT INTO current_git_revisions"
-                    "(source_id,requested_ref,resolved_commit) "
-                    "SELECT r.source_id,r.requested_ref,r.resolved_commit "
-                    "FROM git_revisions AS r JOIN ("
-                    "SELECT source_id FROM git_revisions GROUP BY source_id "
-                    "HAVING COUNT(*)=1"
-                    ") AS single ON single.source_id=r.source_id"
-                )
+                if version in (5, 6, 7):
+                    connection.execute(
+                        "ALTER TABLE catalog_semantic_vectors RENAME TO _semantic_vectors_v7"
+                    )
+                    connection.execute(_CATALOG_SCHEMA[-1])
+                    connection.execute(
+                        "INSERT INTO catalog_semantic_vectors SELECT * FROM _semantic_vectors_v7"
+                    )
+                    connection.execute("DROP TABLE _semantic_vectors_v7")
+                if version < 7:
+                    connection.execute(
+                        "INSERT INTO current_git_revisions"
+                        "(source_id,requested_ref,resolved_commit) "
+                        "SELECT r.source_id,r.requested_ref,r.resolved_commit "
+                        "FROM git_revisions AS r JOIN ("
+                        "SELECT source_id FROM git_revisions GROUP BY source_id "
+                        "HAVING COUNT(*)=1"
+                        ") AS single ON single.source_id=r.source_id"
+                    )
 
                 if version in (0, 1, 2):
                     for statement in _CATALOG_SCHEMA:
@@ -675,7 +892,10 @@ class Store:
                 if version in (0, 1, 2, 3, 4, 5):
                     connection.execute(_CATALOG_SEARCH_SCHEMA)
                     _rebuild_catalog_search_fts(connection)
-                if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                if (
+                    connection.execute("PRAGMA foreign_key_check").fetchone()
+                    is not None
+                ):
                     raise StoreError("store migration failed foreign key validation")
                 connection.execute(
                     "INSERT INTO catalog_fts(catalog_fts) VALUES('integrity-check')"
@@ -885,9 +1105,13 @@ class Store:
                 "AND r.resolved_commit=c.resolved_commit WHERE c.source_id=?",
                 (source_id,),
             ).fetchone()
-            if revision_row is None and connection.execute(
-                "SELECT 1 FROM git_revisions WHERE source_id=?", (source_id,)
-            ).fetchone() is not None:
+            if (
+                revision_row is None
+                and connection.execute(
+                    "SELECT 1 FROM git_revisions WHERE source_id=?", (source_id,)
+                ).fetchone()
+                is not None
+            ):
                 raise StoreError(f"Git source requires a fresh scan: {source_id}")
             revision = (
                 GitRevision(
@@ -913,6 +1137,7 @@ class Store:
         finally:
             connection.close()
 
+    @settings_operation
     def apply_scan(
         self,
         source_id: str,
@@ -947,7 +1172,7 @@ class Store:
                         observation.artifact_id,
                         observation.manifest.digest,
                         CATALOG_FORMAT_VERSION,
-                        semantic.MODEL_KEY,
+                        semantic.model_key(),
                         expected_projection,
                     ),
                 ).fetchone()
@@ -1131,12 +1356,17 @@ class Store:
                                 observation.artifact_id,
                                 manifest.digest,
                                 CATALOG_FORMAT_VERSION,
-                                semantic.MODEL_KEY,
+                                semantic.model_key(),
                                 semantic.projection_digest(projection),
-                                semantic.DIMENSIONS,
+                                semantic.dimensions(),
                                 vector,
                             ),
                         )
+                        if not load_settings()["storage"]["keep_old_vectors"]:
+                            connection.execute(
+                                "DELETE FROM catalog_semantic_vectors WHERE artifact_id=? AND model_key<>?",
+                                (observation.artifact_id, semantic.model_key()),
+                            )
                     if revision_id is not None:
                         connection.execute(
                             "INSERT INTO artifact_git_revisions"
@@ -1194,7 +1424,9 @@ class Store:
             raise StoreError("invalid_request: content_digest must be a SHA-256 digest")
         if resource_path is not None:
             try:
-                _validate_relative_posix(resource_path, "resource path", allow_root=False)
+                _validate_relative_posix(
+                    resource_path, "resource path", allow_root=False
+                )
             except StoreError as error:
                 raise StoreError(f"invalid_request: {error}") from None
         connection = self._connect()
@@ -1225,8 +1457,9 @@ class Store:
                 "status": catalog["status"] if catalog is not None else "missing",
                 "name": catalog["name"] if catalog is not None else None,
                 "description": catalog["description"] if catalog is not None else None,
-                "reason": catalog["reason"] if catalog is not None else
-                    "this artifact version is not in the current search index",
+                "reason": catalog["reason"]
+                if catalog is not None
+                else "this artifact version is not in the current search index",
             }
             if resource_path is not None:
                 if catalog is None:
@@ -1235,7 +1468,12 @@ class Store:
                     "SELECT path,status,reason,text FROM catalog_resources "
                     "WHERE artifact_id=? AND content_digest=? "
                     "AND catalog_format_version=? AND path=?",
-                    (artifact_id, row["current_digest"], CATALOG_FORMAT_VERSION, resource_path),
+                    (
+                        artifact_id,
+                        row["current_digest"],
+                        CATALOG_FORMAT_VERSION,
+                        resource_path,
+                    ),
                 ).fetchone()
                 if resource is None:
                     raise StoreError("resource_not_found")
@@ -1324,6 +1562,7 @@ class Store:
         finally:
             connection.close()
 
+    @settings_operation
     def traverse(
         self,
         artifact_id: str,
@@ -1333,15 +1572,17 @@ class Store:
         relationship_types: tuple[str, ...] | None = None,
         direction: str = "outbound",
         depth: int = 1,
-        limit: int = _TRAVERSAL_LIMIT,
+        limit: int | None = None,
         offset: int = 0,
         view_id: str | None = None,
     ) -> dict[str, object]:
+        traversal_settings = load_settings()["traversal"]
+        limit = traversal_settings["default_limit"] if limit is None else limit
         limit, offset, view_id = _page_request(
             limit,
             offset,
             view_id,
-            maximum=_TRAVERSAL_MAX_LIMIT,
+            maximum=traversal_settings["max_limit"],
             view_prefix="t1",
         )
         if type(artifact_id) is not str or not artifact_id:
@@ -1353,7 +1594,9 @@ class Store:
             raise StoreError("invalid_request: content_digest must be a SHA-256 digest")
         if source_ids is not None and (
             type(source_ids) is not tuple
-            or any(type(source_id) is not str or not source_id for source_id in source_ids)
+            or any(
+                type(source_id) is not str or not source_id for source_id in source_ids
+            )
         ):
             raise StoreError(
                 "invalid_request: source_ids must be an ordered tuple of non-empty strings"
@@ -1377,9 +1620,9 @@ class Store:
         )
         if direction not in ("outbound", "inbound", "both"):
             raise StoreError("invalid_request: invalid traversal direction")
-        if type(depth) is not int or not 1 <= depth <= _TRAVERSAL_MAX_DEPTH:
+        if type(depth) is not int or not 1 <= depth <= traversal_settings["max_depth"]:
             raise StoreError(
-                f"invalid_request: depth must be between 1 and {_TRAVERSAL_MAX_DEPTH}"
+                f"invalid_request: depth must be between 1 and {traversal_settings['max_depth']}"
             )
 
         connection = self._connect()
@@ -1393,7 +1636,11 @@ class Store:
             ]
             scope = enabled_source_ids if source_ids is None else list(source_ids)
             unavailable = next(
-                (source_id for source_id in scope if source_id not in enabled_source_ids),
+                (
+                    source_id
+                    for source_id in scope
+                    if source_id not in enabled_source_ids
+                ),
                 None,
             )
             if unavailable is not None:
@@ -1502,9 +1749,7 @@ class Store:
             entries_by_name: dict[str, list[dict[str, object]]] = {}
             for entry in entries:
                 entries_by_name.setdefault(str(entry["name"]), []).append(entry)
-            relationships_by_key: dict[
-                tuple[str, str], list[dict[str, object]]
-            ] = {}
+            relationships_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
             relationships_by_target: dict[str, list[dict[str, object]]] = {}
             for relationship in relationships:
                 key = (
@@ -1692,34 +1937,205 @@ class Store:
         finally:
             connection.close()
 
+    @settings_operation
     def discover(
         self,
         query: str,
         *,
         source_ids: tuple[str, ...] | None = None,
-        limit: int = _DISCOVERY_LIMIT,
+        limit: int | None = None,
         offset: int = 0,
         view_id: str | None = None,
     ) -> dict[str, object]:
+        from capalith import ranking
+
+        search_settings = load_settings()["search"]
+        limit = search_settings["default_limit"] if limit is None else limit
+        limit, offset, view_id = _page_request(
+            limit,
+            offset,
+            view_id,
+            maximum=search_settings["max_limit"],
+            view_prefix="d1",
+        )
+
+        def local(reason: str) -> dict[str, object]:
+            result = self._discover_local(
+                query,
+                source_ids=source_ids,
+                limit=limit,
+                offset=offset,
+                view_id=view_id,
+            )
+            result["ranking"] = {"path": "free", "reason": reason}
+            return result
+
+        try:
+            config = ranking.settings()
+        except ranking.RankingUnavailable as error:
+            return local(str(error))
+        if config is None:
+            return local("not_configured")
+
+        snapshot: dict[str, Any] = {}
+        free = self._discover_local(
+            query,
+            source_ids=source_ids,
+            limit=search_settings["max_limit"],
+            _snapshot=snapshot,
+            _roster=config.policy["wide_candidates"],
+        )
+        # A free continuation stays free even if the provider has recovered.
+        if view_id == free["retrieval"]["view_id"]:
+            return local("continued_free_view")
+        key = ranking.identity(
+            {"catalog": snapshot["view_id"], "query": query, "ranking": config.identity}
+        )
+        views = ranking.Views(config)
+        try:
+            cached = views.get(key)
+        except (OSError, sqlite3.Error, ValueError, StoreError):
+            if view_id is not None:
+                raise StoreError("stale_view") from None
+            return local("cache_unavailable")
+        if view_id is not None and (cached is None or cached[0] != view_id):
+            raise StoreError("stale_view")
+        if cached is None:
+            preferred: dict[str, dict[str, Any]] = {}
+            for entry in sorted(
+                snapshot["entries"],
+                key=lambda e: (e["name"], e["bundle_path"], e["artifact_id"]),
+            ):
+                preferred.setdefault(entry["name"], entry)
+            skills = {
+                n: {"description": e["description"], "skill_text": e["skill_text"]}
+                for n, e in sorted(preferred.items())
+            }
+            # The first call sends every searched skill when they fit; otherwise the free search's top N.
+            # SQLite is already released (the free search committed), so the paid call holds no lock.
+            skills, roster = ranking.choose_roster(query, skills, snapshot.get("free_order", []), config)
+            if not skills and roster["total"]:
+                return local("empty_roster")
+            try:
+                judged = ranking.rank(query, skills, config)
+            except ranking.RankingUnavailable as error:
+                return local(str(error))
+            selected = [preferred[n] for n in judged["order"]]
+            order = {e["artifact_id"]: i for i, e in enumerate(selected)}
+            scores = {e["artifact_id"]: judged["scores"][e["name"]] for e in selected}
+            result = build_discovery(
+                query,
+                query_tokens(query),
+                snapshot["coverage"],
+                snapshot["entries"],
+                [],
+                set(),
+                snapshot["relationships"],
+                order,
+                relevance_scores=scores,
+            )
+            result["source_scope"] = free["source_scope"]
+            result["ranking"] = {
+                "path": "ai",
+                "model": config.policy["model"],
+                "abstained": not bool(selected),
+                "none_probability": judged["none_probability"],
+                "none_threshold": config.policy["none_threshold"],
+                "roster": roster,
+            }
+            result["retrieval"] = {"method": "typesafe_choice_verified"}
+            try:
+                cached = views.put(key, result)
+            except (OSError, sqlite3.Error, ValueError, StoreError):
+                return local("cache_unavailable")
+        current_view, result = cached
+        candidates = result["candidates"]
+        page = candidates[offset : offset + limit]
+        has_more = offset + len(page) < len(candidates)
+        result["candidates"] = page
+        result["retrieval"].update(
+            {
+                "view_id": current_view,
+                "limit": limit,
+                "offset": offset,
+                "returned": len(page),
+                "has_more": has_more,
+                "next_offset": offset + len(page) if has_more else None,
+            }
+        )
+        return result
+
+    def lookup_name(self, name: str, *, source_ids: tuple[str, ...] | None = None) -> dict[str, Any] | None:
+        """The present skill named exactly `name` in the searched sources, or None.
+
+        Always the free local search, one result: it never reaches a ranking service.
+        """
+        found = self._discover_local(name, source_ids=source_ids, limit=1)["candidates"]
+        return found[0] if found and found[0]["name"] == name else None
+
+    def _discover_local(
+        self,
+        query: str,
+        *,
+        source_ids: tuple[str, ...] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        view_id: str | None = None,
+        _snapshot: dict[str, Any] | None = None,
+        _roster: int | None = None,
+    ) -> dict[str, object]:
+        search_settings = load_settings()["search"]
+        limit = search_settings["default_limit"] if limit is None else limit
         tokens = query_tokens(query)
         normalized_query = " ".join(tokens)
         limit, offset, view_id = _page_request(
             limit,
             offset,
             view_id,
-            maximum=_DISCOVERY_MAX_LIMIT,
+            maximum=search_settings["max_limit"],
             view_prefix="d1",
         )
         if source_ids is not None and (
             type(source_ids) is not tuple
-            or any(type(source_id) is not str or not source_id for source_id in source_ids)
+            or any(
+                type(source_id) is not str or not source_id for source_id in source_ids
+            )
         ):
             raise StoreError(
                 "invalid_request: source_ids must be an ordered tuple of non-empty strings"
             )
         if source_ids is not None and len(set(source_ids)) != len(source_ids):
             raise StoreError("invalid_request: source_ids must not contain duplicates")
-        connection = self._connect()
+        with _search_connection(self) as session:
+            return self._discover_prepared(
+                query,
+                source_ids=source_ids,
+                limit=limit,
+                offset=offset,
+                view_id=view_id,
+                _snapshot=_snapshot,
+                _roster=_roster,
+                _session=session,
+                _tokens=tokens,
+            )
+
+    def _discover_prepared(
+        self,
+        query: str,
+        *,
+        source_ids: tuple[str, ...] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        view_id: str | None = None,
+        _snapshot: dict[str, Any] | None = None,
+        _roster: int | None = None,
+        _session: _SearchSession,
+        _tokens: tuple[str, ...],
+    ) -> dict[str, object]:
+        search_settings = load_settings()["search"]
+        tokens = _tokens
+        normalized_query = " ".join(tokens)
+        connection = _session.connection
         try:
             connection.execute("BEGIN")
             enabled_source_ids = [
@@ -1748,328 +2164,409 @@ class Store:
             retrieval = {
                 "method": "sqlite_fts5_bm25",
             }
+            semantic_report = {
+                "status": "unavailable",
+                "reason": "not_indexed",
+                "indexed": 0,
+                "total": 0,
+            }
             if scope:
-                # Keep source priority in the query that uses it.
-                scope_values = ",".join("(?,?)" for _ in scope)
-                scope_parameters = tuple(
-                    value
-                    for priority, source_id in enumerate(scope)
-                    for value in (source_id, priority)
+                # The first source read has established this transaction's
+                # SQLite snapshot. data_version belongs to this retained
+                # connection and changes after another connection commits.
+                generation = connection.execute("PRAGMA data_version").fetchone()[0]
+                preparation_key = (
+                    tuple(scope),
+                    semantic.model_key(),
+                    tuple(search_settings["stopwords"]),
                 )
-                coverage_rows = connection.execute(
-                    f"WITH source_scope(source_id,source_priority) AS (VALUES {scope_values}) "
-                    "SELECT c.status FROM artifacts AS a "
-                    "JOIN source_scope AS p ON p.source_id=a.source_id "
-                    "LEFT JOIN catalog_entries AS c "
-                    "ON c.artifact_id=a.id AND c.content_digest=a.current_digest "
-                    "AND c.catalog_format_version=? "
-                    "WHERE a.present=1 ORDER BY a.id",
-                    (*scope_parameters, CATALOG_FORMAT_VERSION),
-                ).fetchall()
-                for row in coverage_rows:
-                    status = (
-                        row["status"]
-                        if row["status"] in ("ready", "invalid")
-                        else "missing"
+                prepared = _session.prepared
+                if (
+                    generation != _session.generation
+                    or prepared is None
+                    or prepared["key"] != preparation_key
+                ):
+                    _session.prepared = None
+                    # Keep source priority in the query that uses it.
+                    scope_values = ",".join("(?,?)" for _ in scope)
+                    scope_parameters = tuple(
+                        value
+                        for priority, source_id in enumerate(scope)
+                        for value in (source_id, priority)
                     )
-                    coverage_counts[status] += 1
-
-                preferred_entries = (
-                    f"WITH source_scope(source_id,source_priority) AS (VALUES {scope_values}), "
-                    "ranked_entries AS ("
-                    "SELECT c.artifact_id,c.content_digest,c.name,c.description,c.skill_text,"
-                    "a.source_id,a.bundle_path,p.source_priority,"
-                    "MIN(p.source_priority) OVER (PARTITION BY c.name) "
-                    "AS best_source_priority "
-                    "FROM catalog_entries AS c JOIN artifacts AS a "
-                    "ON a.id=c.artifact_id AND a.current_digest=c.content_digest "
-                    "JOIN source_scope AS p ON p.source_id=a.source_id "
-                    "WHERE a.present=1 AND c.catalog_format_version=? "
-                    "AND c.status='ready'), "
-                    "preferred_entries AS (SELECT * FROM ranked_entries "
-                    "WHERE source_priority=best_source_priority), "
-                    "search_entries AS (SELECT * FROM (SELECT *,ROW_NUMBER() OVER ("
-                    "PARTITION BY name ORDER BY bundle_path,artifact_id) AS name_row "
-                    "FROM preferred_entries) WHERE name_row=1) "
-                )
-                entries = [
-                    dict(row)
-                    for row in connection.execute(
-                        preferred_entries
-                        + "SELECT artifact_id,content_digest,name,description,skill_text,"
-                        "source_id,bundle_path,source_priority "
-                        "FROM preferred_entries ORDER BY name,artifact_id",
+                    coverage_rows = connection.execute(
+                        f"WITH source_scope(source_id,source_priority) AS (VALUES {scope_values}) "
+                        "SELECT c.status FROM artifacts AS a "
+                        "JOIN source_scope AS p ON p.source_id=a.source_id "
+                        "LEFT JOIN catalog_entries AS c "
+                        "ON c.artifact_id=a.id AND c.content_digest=a.current_digest "
+                        "AND c.catalog_format_version=? "
+                        "WHERE a.present=1 ORDER BY a.id",
                         (*scope_parameters, CATALOG_FORMAT_VERSION),
-                    )
-                ]
-                semantic_rows = connection.execute(
-                    preferred_entries
-                    + "SELECT v.artifact_id,v.content_digest,v.projection_digest,v.vector,"
-                    "p.name,p.description,p.skill_text,p.source_priority "
-                    "FROM catalog_semantic_vectors AS v JOIN search_entries AS p "
-                    "ON p.artifact_id=v.artifact_id AND p.content_digest=v.content_digest "
-                    "WHERE v.catalog_format_version=? AND v.model_key=? "
-                    "ORDER BY p.name,p.artifact_id",
-                    (
-                        *scope_parameters,
-                        CATALOG_FORMAT_VERSION,
-                        CATALOG_FORMAT_VERSION,
-                        semantic.MODEL_KEY,
-                    ),
-                ).fetchall()
-                semantic_complete = len(semantic_rows) == len(
-                    {str(entry["name"]) for entry in entries}
-                ) and all(
-                    row["projection_digest"]
-                    == semantic.projection_digest(
-                        semantic.projection(
-                            str(row["name"]),
-                            str(row["description"]),
-                            str(row["skill_text"]),
+                    ).fetchall()
+                    for row in coverage_rows:
+                        status = (
+                            row["status"]
+                            if row["status"] in ("ready", "invalid")
+                            else "missing"
                         )
+                        coverage_counts[status] += 1
+
+                    preferred_entries = (
+                        f"WITH source_scope(source_id,source_priority) AS (VALUES {scope_values}), "
+                        "ranked_entries AS ("
+                        "SELECT c.artifact_id,c.content_digest,c.name,c.description,c.skill_text,"
+                        "a.source_id,a.bundle_path,p.source_priority,"
+                        "MIN(p.source_priority) OVER (PARTITION BY c.name) "
+                        "AS best_source_priority "
+                        "FROM catalog_entries AS c JOIN artifacts AS a "
+                        "ON a.id=c.artifact_id AND a.current_digest=c.content_digest "
+                        "JOIN source_scope AS p ON p.source_id=a.source_id "
+                        "WHERE a.present=1 AND c.catalog_format_version=? "
+                        "AND c.status='ready'), "
+                        "preferred_entries AS (SELECT * FROM ranked_entries "
+                        "WHERE source_priority=best_source_priority), "
+                        "search_entries AS (SELECT * FROM (SELECT *,ROW_NUMBER() OVER ("
+                        "PARTITION BY name ORDER BY bundle_path,artifact_id) AS name_row "
+                        "FROM preferred_entries) WHERE name_row=1) "
                     )
-                    for row in semantic_rows
+                    entries = [
+                        dict(row)
+                        for row in connection.execute(
+                            preferred_entries
+                            + "SELECT artifact_id,content_digest,name,description,skill_text,"
+                            "source_id,bundle_path,source_priority "
+                            "FROM preferred_entries ORDER BY name,artifact_id",
+                            (*scope_parameters, CATALOG_FORMAT_VERSION),
+                        )
+                    ]
+                    semantic_rows = connection.execute(
+                        preferred_entries
+                        + "SELECT v.artifact_id,v.content_digest,v.projection_digest,v.vector,"
+                        "p.name,p.description,p.skill_text,p.source_priority "
+                        "FROM catalog_semantic_vectors AS v JOIN search_entries AS p "
+                        "ON p.artifact_id=v.artifact_id AND p.content_digest=v.content_digest "
+                        "WHERE v.catalog_format_version=? AND v.model_key=? "
+                        "ORDER BY p.name,p.artifact_id",
+                        (
+                            *scope_parameters,
+                            CATALOG_FORMAT_VERSION,
+                            CATALOG_FORMAT_VERSION,
+                            semantic.model_key(),
+                        ),
+                    ).fetchall()
+                    semantic_complete = len(semantic_rows) == len(
+                        {str(entry["name"]) for entry in entries}
+                    ) and all(
+                        row["projection_digest"]
+                        == semantic.projection_digest(
+                            semantic.projection(
+                                str(row["name"]),
+                                str(row["description"]),
+                                str(row["skill_text"]),
+                            )
+                        )
+                        for row in semantic_rows
+                    )
+                    connection.execute(
+                        "DROP TABLE IF EXISTS temp.search_entries_filter"
+                    )
+                    connection.execute("DROP TABLE IF EXISTS temp.scoped_catalog_fts")
+                    connection.execute(
+                        "CREATE TEMP TABLE search_entries_filter(artifact_id TEXT PRIMARY KEY,content_digest TEXT NOT NULL)"
+                    )
+                    selected = {}
+                    for entry in sorted(
+                        entries,
+                        key=lambda e: (
+                            str(e["name"]),
+                            str(e["bundle_path"]),
+                            str(e["artifact_id"]),
+                        ),
+                    ):
+                        selected.setdefault(str(entry["name"]), entry)
+                    connection.executemany(
+                        "INSERT INTO search_entries_filter VALUES(?,?)",
+                        (
+                            (str(e["artifact_id"]), str(e["content_digest"]))
+                            for e in selected.values()
+                        ),
+                    )
+                    exact_names = {}
+                    for name in selected:
+                        exact_names.setdefault(" ".join(query_tokens(name)), []).append(
+                            name
+                        )
+                    prepared = {
+                        "key": preparation_key,
+                        "exact_names": exact_names,
+                        "discovery_entries": DiscoveryEntries(entries),
+                        "lexical_entries": {
+                            str(e["artifact_id"]): e for e in selected.values()
+                        },
+                        "coverage_counts": coverage_counts,
+                        "entries": entries,
+                        "semantic_rows": semantic_rows,
+                        "semantic_complete": semantic_complete,
+                        "preferred_entries": preferred_entries,
+                        "scope_parameters": scope_parameters,
+                    }
+                    _session.prepared = prepared
+                    _session.generation = generation
+                    _session.sizing_pending = True
+                else:
+                    coverage_counts = prepared["coverage_counts"]
+                    entries = prepared["entries"]
+                    semantic_rows = prepared["semantic_rows"]
+                    semantic_complete = prepared["semantic_complete"]
+                    preferred_entries = prepared["preferred_entries"]
+                    scope_parameters = prepared["scope_parameters"]
+                exact_names = set(prepared["exact_names"].get(normalized_query, ()))
+                semantic_report.update(
+                    indexed=len(semantic_rows),
+                    total=len({str(entry["name"]) for entry in entries}),
                 )
+                if not semantic_complete:
+                    semantic_report.update(
+                        status="stale",
+                        reason="index_incomplete_or_projection_changed",
+                        action="index_skills",
+                    )
                 query_vector = (
                     _semantic_query_vector(normalized_query)
                     if semantic_rows and semantic_complete
                     else None
                 )
-                semantic_candidates = []
+                import numpy
+
+                # One set of integer sort keys for the whole snapshot (every entry); the meaning rows and the word rows
+                # are positions in it. A subset's rows order exactly as they do among all entries: the same names,
+                # source priorities and artifact ids, and a rank among more strings still orders as the string does.
+                entry_keys = prepared.get("entry_keys")
+                if entry_keys is None:
+                    entry_keys = _OrderKeys(entries)
+                    prepared["entry_keys"] = entry_keys
+                    _session.sizing_pending = True
+                exact_flags = entry_keys.flags(exact_names)
+                semantic_to_entry = None
+                semantic_chosen = numpy.empty(0, dtype=numpy.int64)    # the gated, name-deduplicated meaning list: indexes of semantic_rows, best first
+                ungated_names: list[str] = []
+                if semantic_complete and semantic_rows:
+                    semantic_report.update(
+                        status="unavailable" if query_vector is None else "no_match",
+                        reason="model_unavailable_or_disabled"
+                        if query_vector is None
+                        else "below_minimum_similarity",
+                    )
                 if query_vector is not None:
+                    import numpy
+
+                    # The meaning pass over every skill, in arrays: the same keys as the tuples it replaces
+                    # (exact name first, higher similarity, source priority, name, artifact id), compared as integers
+                    # (a string's rank among the sorted strings), so the order is exactly the tuple sort's.
                     try:
-                        scored = []
-                        for row in semantic_rows:
-                            similarity = semantic.similarity(
-                                query_vector, bytes(row["vector"])
+                        vector_index = prepared.get("vector_index")
+                        if vector_index is None:
+                            vector_index = semantic.VectorIndex(
+                                [bytes(row["vector"]) for row in semantic_rows]
                             )
-                            if not math.isfinite(similarity):
-                                raise semantic.SemanticUnavailable(
-                                    "semantic scoring returned an invalid value"
-                                )
-                            scored.append(
-                                (
-                                    0
-                                    if str(row["name"]).casefold()
-                                    == normalized_query
-                                    else 1,
-                                    -similarity,
-                                    int(row["source_priority"]),
-                                    str(row["name"]),
-                                    str(row["artifact_id"]),
-                                    str(row["content_digest"]),
-                                )
+                            prepared["vector_index"] = vector_index
+                            _session.sizing_pending = True
+                        semantic_to_entry = prepared.get("semantic_to_entry")
+                        if semantic_to_entry is None:
+                            semantic_to_entry = numpy.fromiter(
+                                (entry_keys.index[str(row["artifact_id"])] for row in semantic_rows),
+                                dtype=numpy.int64, count=len(semantic_rows),
                             )
+                            prepared["semantic_to_entry"] = semantic_to_entry
+                            _session.sizing_pending = True
+                        similarity = numpy.asarray(vector_index.scores(query_vector), dtype=numpy.float64)
+                        if not numpy.isfinite(similarity).all():
+                            raise semantic.SemanticUnavailable(
+                                "semantic scoring returned an invalid value"
+                            )
+                        flags = exact_flags[semantic_to_entry]
+                        order = numpy.lexsort((
+                            entry_keys.artifact_rank[semantic_to_entry], entry_keys.name_rank[semantic_to_entry],
+                            entry_keys.priority[semantic_to_entry], -similarity, flags,
+                        ))
                     except semantic.SemanticUnavailable:
-                        scored = []
-                    scored = [
-                        item
-                        for item in scored
-                        if item[0] == 0
-                        or -item[1] >= semantic.MINIMUM_SIMILARITY
-                    ]
-                    if scored:
-                        scored.sort()
-                        selected = []
-                        selected_names: set[str] = set()
-                        for item in scored:
-                            name = item[3]
-                            if name in selected_names:
-                                continue
-                            selected.append(item)
-                            selected_names.add(name)
-                        semantic_candidates = selected
-                search_entries_by_name: dict[str, dict[str, object]] = {}
-                for entry in sorted(
-                    entries,
-                    key=lambda item: (
-                        str(item["name"]),
-                        str(item["bundle_path"]),
-                        str(item["artifact_id"]),
-                    ),
-                ):
-                    search_entries_by_name.setdefault(str(entry["name"]), entry)
-                lexical_entries = {
-                    str(entry["artifact_id"]): entry
-                    for entry in search_entries_by_name.values()
-                }
-                lexical_rows: list[sqlite3.Row] = []
+                        similarity = None
+                        semantic_report.update(
+                            status="unavailable", reason="invalid_vectors"
+                        )
+                    if similarity is not None and len(order):
+                        # The best meaning score over every searched skill, before any gate.
+                        semantic_report["best_similarity"] = round(float(similarity.max()), 6)
+                        if _snapshot is not None and _roster:
+                            ungated_names = [entry_keys.names[int(semantic_to_entry[i])] for i in order[: _roster * 4]]
+                        kept = order[(flags[order] == 0) | (similarity[order] >= search_settings["minimum_similarity"])]
+                        if len(kept):
+                            # First of each name wins: the first position of each name in the sorted order.
+                            _, first = numpy.unique(entry_keys.name_rank[semantic_to_entry[kept]], return_index=True)
+                            semantic_chosen = kept[numpy.sort(first)]
+                lexical_entries = prepared["lexical_entries"]
+                import numpy
+
+                raw_lexical_rows: list[Any] = []
+                positions =numpy.empty(0, dtype=numpy.int64)
+                lexical_order = numpy.empty(0, dtype=numpy.int64)
                 if lexical_entries:
                     use_persistent_fts = tuple(scope) == tuple(enabled_source_ids)
                     fts_table = "catalog_search_fts"
                     if not use_persistent_fts:
                         fts_table = "scoped_catalog_fts"
-                        connection.execute(
-                            "CREATE VIRTUAL TABLE temp.scoped_catalog_fts USING fts5("
-                            "artifact_id UNINDEXED,content_digest UNINDEXED,"
-                            "catalog_format_version UNINDEXED,path_key UNINDEXED,"
-                            "path,body,"
-                            "tokenize='unicode61 remove_diacritics 0 categories "
-                            "''L* N*'' tokenchars ''_''')"
-                        )
-                        connection.execute(
-                            preferred_entries
-                            + "INSERT INTO temp.scoped_catalog_fts("
-                            "artifact_id,content_digest,catalog_format_version,"
-                            "path_key,path,body) "
-                            "SELECT f.artifact_id,f.content_digest,"
-                            "f.catalog_format_version,f.path_key,f.path,f.body "
-                            "FROM catalog_fts AS f JOIN search_entries AS p "
-                            "ON p.artifact_id=f.artifact_id "
-                            "AND p.content_digest=f.content_digest "
-                            "WHERE CAST(f.catalog_format_version AS INTEGER)=?",
-                            (
-                                *scope_parameters,
-                                CATALOG_FORMAT_VERSION,
-                                CATALOG_FORMAT_VERSION,
-                            ),
-                        )
-                    artifact_versions = tuple(
-                        (artifact_id, str(entry["content_digest"]))
-                        for artifact_id, entry in lexical_entries.items()
-                    )
-                    artifact_placeholders = ",".join(
-                        "(?,?)" for _ in artifact_versions
-                    )
+                        if not prepared.get("scoped_fts_ready"):
+                            connection.execute(
+                                "CREATE VIRTUAL TABLE temp.scoped_catalog_fts USING fts5("
+                                "artifact_id UNINDEXED,content_digest UNINDEXED,"
+                                "catalog_format_version UNINDEXED,path_key UNINDEXED,"
+                                "path,body,"
+                                "tokenize='unicode61 remove_diacritics 0 categories "
+                                "''L* N*'' tokenchars ''_''')"
+                            )
+                            connection.execute(
+                                preferred_entries
+                                + "INSERT INTO temp.scoped_catalog_fts("
+                                "artifact_id,content_digest,catalog_format_version,"
+                                "path_key,path,body) "
+                                "SELECT f.artifact_id,f.content_digest,"
+                                "f.catalog_format_version,f.path_key,f.path,f.body "
+                                "FROM catalog_fts AS f JOIN search_entries AS p "
+                                "ON p.artifact_id=f.artifact_id "
+                                "AND p.content_digest=f.content_digest "
+                                "WHERE CAST(f.catalog_format_version AS INTEGER)=?",
+                                (
+                                    *scope_parameters,
+                                    CATALOG_FORMAT_VERSION,
+                                    CATALOG_FORMAT_VERSION,
+                                ),
+                            )
+                            prepared["scoped_fts_ready"] = True
                     lexical_sql = (
-                        "SELECT artifact_id,content_digest,path_key,"
-                        f"bm25({fts_table},0.0,0.0,0.0,0.0,3.0,1.0) AS rank "
-                        f"FROM {fts_table} "
-                        "WHERE CAST(catalog_format_version AS INTEGER)=? "
-                        f"AND (artifact_id,content_digest) IN ({artifact_placeholders}) "
-                        f"AND {fts_table} MATCH ? "
-                        "ORDER BY rank,artifact_id,path_key"
+                        f"SELECT {fts_table}.artifact_id,{fts_table}.content_digest,path_key,"
+                        f"bm25({fts_table},0.0,0.0,0.0,0.0,?,?) AS rank "
+                        f"FROM {fts_table} CROSS JOIN temp.search_entries_filter AS p "
+                        f"ON p.artifact_id={fts_table}.artifact_id AND p.content_digest={fts_table}.content_digest "
+                        f"WHERE CAST({fts_table}.catalog_format_version AS INTEGER)=? "
+                        f"AND {fts_table} MATCH ?"
                     )
                     lexical_parameters = (
+                        search_settings["weights"]["path"],
+                        search_settings["weights"]["body"],
                         CATALOG_FORMAT_VERSION,
-                        *(
-                            value
-                            for artifact_version in artifact_versions
-                            for value in artifact_version
-                        ),
                         fts_query(tokens),
                     )
-                    # Run the limited query first. If it exceeds _LEXICAL_MATCH_LIMIT,
-                    # rerun without a limit so pagination cannot omit matches.
-                    raw_lexical_rows = connection.execute(
-                        lexical_sql + " LIMIT ?",
-                        (*lexical_parameters, _LEXICAL_MATCH_LIMIT + 1),
-                    ).fetchall()
-                    if len(raw_lexical_rows) > _LEXICAL_MATCH_LIMIT:
-                        raw_lexical_rows = connection.execute(
-                            lexical_sql, lexical_parameters
-                        ).fetchall()
-                    best_lexical_rows: dict[str, sqlite3.Row] = {}
-                    for row in raw_lexical_rows:
-                        best_lexical_rows.setdefault(str(row["artifact_id"]), row)
-                    lexical_rows = sorted(
-                        best_lexical_rows.values(),
-                        key=lambda row: (
-                            0
-                            if str(
-                                lexical_entries[str(row["artifact_id"])]["name"]
-                            )
-                            == normalized_query
-                            else 1,
-                            float(row["rank"]),
-                            int(
-                                str(
-                                    lexical_entries[str(row["artifact_id"])][
-                                        "source_priority"
-                                    ]
-                                )
-                            ),
-                            str(
-                                lexical_entries[str(row["artifact_id"])]["name"]
-                            ),
-                            str(row["artifact_id"]),
-                        ),
+                    # One unlimited pass: every match is kept, so a page cannot omit one. (It used to run a limited probe
+                    # first and, past search.lexical_candidates rows, the same statement again: same rows, twice the cost.)
+                    word_cursor = connection.execute(lexical_sql, lexical_parameters)
+                    word_cursor.row_factory = None          # plain tuples: (artifact_id, content_digest, path_key, rank)
+                    raw_lexical_rows = word_cursor.fetchall()
+                    # The statement has no ORDER BY: the order is made here. Each artifact is represented by its best row,
+                    # the one the old ORDER BY rank,artifact_id,path_key put first (lowest rank, then lowest path key);
+                    # the artifacts are ordered by (exact name first, that rank, source priority, name, artifact id).
+                    positions = numpy.fromiter(
+                        (entry_keys.index[str(row[0])] for row in raw_lexical_rows),
+                        dtype=numpy.int64, count=len(raw_lexical_rows),
                     )
-                if semantic_candidates:
-                    lexical_ranks = {
-                        str(row["artifact_id"]): rank
-                        for rank, row in enumerate(lexical_rows, 1)
-                    }
-                    semantic_ranks = {
-                        artifact: rank
-                        for rank, (_, _, _, _, artifact, _) in enumerate(
-                            semantic_candidates, 1
-                        )
-                    }
-                    lexical_by_artifact = {
-                        str(row["artifact_id"]): row for row in lexical_rows
-                    }
-                    semantic_by_artifact = {
-                        artifact: item
-                        for item in semantic_candidates
-                        for artifact in (item[4],)
-                    }
-                    entries_by_artifact = {
-                        str(entry["artifact_id"]): entry for entry in entries
-                    }
-                    fused = []
-                    for artifact in lexical_ranks.keys() | semantic_ranks.keys():
-                        lexical_rank = lexical_ranks.get(artifact)
-                        semantic_rank = semantic_ranks.get(artifact)
-                        fused_score = sum(
-                            1 / (_RRF_RANK_CONSTANT + rank)
-                            for rank in (lexical_rank, semantic_rank)
-                            if rank is not None
-                        )
-                        entry = entries_by_artifact[artifact]
-                        row = lexical_by_artifact.get(artifact)
-                        if row is None:
-                            semantic_row = semantic_by_artifact[artifact]
+                    row_ranks = numpy.fromiter(
+                        (float(row[3]) for row in raw_lexical_rows), dtype=numpy.float64, count=len(raw_lexical_rows),
+                    )
+                    artifacts, inverse, counts = numpy.unique(positions, return_inverse=True, return_counts=True)
+                    if len(artifacts) == len(positions):
+                        first_seen = numpy.arange(len(positions))
+                    else:
+                        repeated = numpy.nonzero(counts[inverse] > 1)[0]
+                        best_of: dict[int, int] = {}
+                        for i in repeated:
+                            place = int(positions[i])
+                            held = best_of.get(place)
+                            if held is None or (row_ranks[i], str(raw_lexical_rows[i][2])) < (row_ranks[held], str(raw_lexical_rows[held][2])):
+                                best_of[place] = int(i)
+                        first_seen = numpy.concatenate((
+                            numpy.nonzero(counts[inverse] == 1)[0], numpy.array(sorted(best_of.values()), dtype=numpy.int64),
+                        ))
+                    kept_rows = positions[first_seen]
+                    lexical_order = first_seen[numpy.lexsort((
+                        entry_keys.artifact_rank[kept_rows], entry_keys.name_rank[kept_rows],
+                        entry_keys.priority[kept_rows], row_ranks[first_seen], exact_flags[kept_rows],
+                    ))]
+                if len(semantic_chosen):
+                    # The lexical position (1-based) of each matched artifact, and the union of both lists, fused.
+                    matched = len(lexical_order)
+                    entry_of_lexical = positions[lexical_order] if matched else numpy.empty(0, dtype=numpy.int64)
+                    semantic_entry = semantic_to_entry[semantic_chosen]
+                    lexical_slot = numpy.full(len(entry_keys.names), -1, dtype=numpy.int64)
+                    lexical_slot[entry_of_lexical] = numpy.arange(1, matched + 1)
+                    weights = search_settings["fusion_weights"]
+                    rrf_k = search_settings["rrf_k"]
+                    lexical_score = weights["lexical"] / _rank_denominators(rrf_k, matched)
+                    semantic_term = weights["semantic"] / _rank_denominators(rrf_k, len(semantic_chosen))
+                    slot = lexical_slot[semantic_entry]
+                    shared = slot > 0
+                    scores = lexical_score.copy()
+                    scores[slot[shared] - 1] = lexical_score[slot[shared] - 1] + semantic_term[shared]      # lexical term first, as the sum was
+                    union_entries = numpy.concatenate((entry_of_lexical, semantic_entry[~shared]))
+                    union_scores = numpy.concatenate((scores, semantic_term[~shared]))
+                    union_order = numpy.lexsort((
+                        entry_keys.artifact_rank[union_entries], entry_keys.name_rank[union_entries],
+                        entry_keys.priority[union_entries], -union_scores, exact_flags[union_entries],
+                    ))
+                    # The first row of each name wins; only as many rows as the page and the roster can read are built.
+                    _, first_of_name = numpy.unique(entry_keys.name_rank[union_entries[union_order]], return_index=True)
+                    first_of_name.sort()
+                    needed = max(offset + limit + 1, _roster or 0)
+                    meaning_rank = numpy.zeros(len(entry_keys.names), dtype=numpy.int64)
+                    meaning_rank[semantic_entry] = numpy.arange(1, len(semantic_chosen) + 1)
+                    meaning_row = numpy.full(len(entry_keys.names), -1, dtype=numpy.int64)
+                    meaning_row[semantic_entry] = semantic_chosen
+                    for place in first_of_name[:needed]:
+                        member = int(union_order[place])
+                        entry = int(union_entries[member])
+                        artifact = entry_keys.artifacts[entry]
+                        lexical_rank = int(lexical_slot[entry])
+                        lexical_rank = lexical_rank if lexical_rank > 0 else None
+                        searched = int(meaning_row[entry])
+                        if lexical_rank is not None:
+                            row = _word_row(raw_lexical_rows[int(lexical_order[lexical_rank - 1])])
+                        else:
                             row = {
                                 "artifact_id": artifact,
-                                "content_digest": semantic_row[5],
+                                "content_digest": str(semantic_rows[searched]["content_digest"]),
                                 "path_key": "__semantic__",
                             }
-                        fused.append(
-                            (
-                                0
-                                if str(entry["name"]).casefold()
-                                == normalized_query
-                                else 1,
-                                -fused_score,
-                                int(str(entry["source_priority"])),
-                                str(entry["name"]),
-                                artifact,
-                                row,
-                                lexical_rank,
-                                semantic_rank,
-                                fused_score,
-                            )
-                        )
-                    fused.sort(key=lambda item: item[:5])
-                    selected_names: set[str] = set()
-                    semantic_score_by_artifact = {
-                        artifact: -negative_score
-                        for _, negative_score, _, _, artifact, _ in semantic_candidates
-                    }
-                    for item in fused:
-                        name, artifact, row = item[3], item[4], item[5]
-                        if name in selected_names:
-                            continue
-                        selected_names.add(name)
                         candidate_rows.append(row)
                         fusion_scores[artifact] = {
-                            "fused_score": round(item[8], 9),
-                            "lexical_rank": item[6],
-                            "semantic_rank": item[7],
+                            "fused_score": round(float(union_scores[member]), 9),
+                            "lexical_rank": lexical_rank,
+                            "semantic_rank": int(meaning_rank[entry]) or None,
                         }
-                        if artifact in semantic_score_by_artifact:
-                            semantic_scores[artifact] = semantic_score_by_artifact[
-                                artifact
-                            ]
+                        if searched >= 0:
+                            semantic_scores[artifact] = float(similarity[searched])
                     retrieval = {
                         "method": "sqlite_fts5_bm25_local_semantic_rrf",
-                        "model": semantic.MODEL_KEY,
-                        "overfetch": max(len(lexical_rows), len(semantic_candidates)),
-                        "rank_constant": _RRF_RANK_CONSTANT,
+                        "model": semantic.model_key(),
+                        "overfetch": max(matched, len(semantic_chosen)),
+                        "rank_constant": search_settings["rrf_k"],
                     }
+                    semantic_report.update(status="used", reason="candidates_found")
                 else:
-                    candidate_rows = list(lexical_rows)
+                    # Words only: the page and the roster read the first rows of the lexical order (names may repeat here).
+                    wanted, names_seen = offset + limit + 1, set()
+                    for place in lexical_order:
+                        raw = raw_lexical_rows[int(place)]
+                        candidate_rows.append(_word_row(raw))
+                        names_seen.add(entry_keys.names[entry_keys.index[str(raw[0])]])
+                        if len(candidate_rows) >= wanted and len(names_seen) >= (_roster or 0):
+                            break
+                if _snapshot is not None and _roster:
+                    # The free order for this query, for the AI call's roster: the fused (or lexical) candidates,
+                    # then the best meaning scores below the gate, up to the roster size.
+                    by_artifact = prepared["lexical_entries"]
+                    ordered_names = list(dict.fromkeys(
+                        [str(by_artifact[str(row["artifact_id"])]["name"]) for row in candidate_rows] + ungated_names
+                    ))
+                    _snapshot["free_order"] = ordered_names[:_roster]
                 candidate_rows = candidate_rows[: offset + limit + 1]
                 candidate_ids = [str(row["artifact_id"]) for row in candidate_rows]
                 candidate_id_set = set(candidate_ids)
@@ -2097,38 +2594,47 @@ class Store:
                             (*candidate_ids, CATALOG_FORMAT_VERSION),
                         )
                     ]
-                relationships = [
-                    dict(row)
-                    for row in connection.execute(
-                        preferred_entries
-                        + "SELECT r.artifact_id,r.content_digest,r.relationship_type,"
-                        "r.target_name,r.metadata_key,r.evidence_path,r.evidence_line "
-                        "FROM catalog_relationships AS r JOIN preferred_entries AS p "
-                        "ON p.artifact_id=r.artifact_id AND p.content_digest=r.content_digest "
-                        "WHERE r.catalog_format_version=? "
-                        "ORDER BY r.artifact_id,r.relationship_type,r.target_name",
-                        (
-                            *scope_parameters,
-                            CATALOG_FORMAT_VERSION,
-                            CATALOG_FORMAT_VERSION,
-                        ),
-                    )
-                ]
+                if "relationships" not in prepared:
+                    relationships = [
+                        dict(row)
+                        for row in connection.execute(
+                            preferred_entries
+                            + "SELECT r.artifact_id,r.content_digest,r.relationship_type,"
+                            "r.target_name,r.metadata_key,r.evidence_path,r.evidence_line "
+                            "FROM catalog_relationships AS r JOIN preferred_entries AS p "
+                            "ON p.artifact_id=r.artifact_id AND p.content_digest=r.content_digest "
+                            "WHERE r.catalog_format_version=? "
+                            "ORDER BY r.artifact_id,r.relationship_type,r.target_name",
+                            (
+                                *scope_parameters,
+                                CATALOG_FORMAT_VERSION,
+                                CATALOG_FORMAT_VERSION,
+                            ),
+                        )
+                    ]
+                    prepared["relationships"] = relationships
+                else:
+                    relationships = prepared["relationships"]
             coverage: dict[str, dict[str, object]] = {
                 status: {"count": count} for status, count in coverage_counts.items()
             }
             matched_resources = {
-                (str(row["artifact_id"]), str(row["content_digest"]), str(row["path_key"]))
+                (
+                    str(row["artifact_id"]),
+                    str(row["content_digest"]),
+                    str(row["path_key"]),
+                )
                 for row in candidate_rows
             }
             candidate_order = {
-                str(row["artifact_id"]): index for index, row in enumerate(candidate_rows)
+                str(row["artifact_id"]): index
+                for index, row in enumerate(candidate_rows)
             }
             result = build_discovery(
                 query,
                 tokens,
                 coverage,
-                entries,
+                prepared["discovery_entries"] if scope else entries,
                 resources,
                 matched_resources,
                 relationships,
@@ -2136,6 +2642,17 @@ class Store:
                 semantic_scores,
                 fusion_scores,
             )
+            source_state = prepared.get("source_state") if scope else None
+            if source_state is None:
+                source_state = _view_id(
+                    "catalog",
+                    {
+                        "semantic_state": _semantic_state(connection, scope),
+                        "state": _exploration_state(connection, scope),
+                    },
+                )
+                if scope:
+                    prepared["source_state"] = source_state
             current_view_id = _view_id(
                 "d1",
                 {
@@ -2144,24 +2661,34 @@ class Store:
                     "query_terms": list(tokens),
                     "store_schema_version": SCHEMA_VERSION,
                     "ranking": {
-                        "minimum_similarity": semantic.MINIMUM_SIMILARITY,
-                        "model": semantic.MODEL_KEY,
-                        "rank_constant": _RRF_RANK_CONSTANT,
+                        "minimum_similarity": search_settings["minimum_similarity"],
+                        "model": semantic.model_key(),
+                        "rank_constant": search_settings["rrf_k"],
+                        "settings": search_settings,
                         "retrieval": retrieval,
                     },
                     "source_scope": scope,
-                    "semantic_state": _semantic_state(connection, scope),
-                    "state": _exploration_state(connection, scope),
+                    "catalog_state": source_state,
                 },
             )
             if view_id is not None and view_id != current_view_id:
                 raise StoreError("stale_view")
+            if _snapshot is not None:
+                _snapshot.update(
+                    {
+                        "entries": entries,
+                        "relationships": relationships,
+                        "coverage": coverage,
+                        "view_id": current_view_id,
+                    }
+                )
             candidates = result["candidates"]
             assert isinstance(candidates, list)
             page = candidates[offset : offset + limit]
             returned = len(page)
             has_more = offset + returned < len(candidates)
             result["candidates"] = page
+            result["semantic"] = semantic_report
             result["retrieval"] = {
                 **retrieval,
                 "has_more": has_more,
@@ -2175,11 +2702,12 @@ class Store:
             connection.execute("COMMIT")
             return result
         except BaseException:
+            _session.prepared = None
+            _session.generation = -1
+            _session.sizing_pending = True
             if connection.in_transaction:
                 connection.execute("ROLLBACK")
             raise
-        finally:
-            connection.close()
 
 
 def _rebuild_catalog_search_fts(connection: sqlite3.Connection) -> None:

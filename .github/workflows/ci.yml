@@ -7,9 +7,22 @@ on:
 permissions:
   contents: read
 
+# One job is required: Linux x86_64 with CPython 3.11, the only supported platform.
+# The other jobs run so that their results can be read; they do not fail the workflow
+# (continue-on-error) and nothing lists them as supported until each has passed here.
+# Runner labels are from GitHub's hosted-runner reference: ubuntu-24.04, macos-15 (arm64), windows-2025.
+# Per-platform requirement files come from tools/lock_hashes.py (public PyPI metadata, no install).
 jobs:
+  # Every pinned action's commit must be the one its version comment names (tools/check_action_pins.py, git ls-remote).
+  action-pins:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 tools/check_action_pins.py
+
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -18,3 +31,71 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install --require-hashes -r requirements.txt
       - run: PYTHONWARNINGS=error python -m unittest discover -s tests -v
+
+  linux-newer-python:
+    name: "linux x86_64, CPython ${{ matrix.python }} (not yet proven)"
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.12"
+            lock: requirements-linux-py312.txt
+          - python: "3.13"
+            lock: requirements-linux-py313.txt
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --require-hashes -r ${{ matrix.lock }}
+      - run: PYTHONWARNINGS=error python -m unittest discover -s tests -v
+
+  macos:
+    name: "macOS arm64, CPython ${{ matrix.python }} (not yet proven)"
+    runs-on: macos-15
+    continue-on-error: true
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.11"
+            lock: requirements-macos-arm64-py311.txt
+          - python: "3.12"
+            lock: requirements-macos-arm64-py312.txt
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --require-hashes -r ${{ matrix.lock }}
+      - run: PYTHONWARNINGS=error python -m unittest discover -s tests -v
+
+  wsl:
+    name: "Windows with WSL2, Ubuntu 24.04 (not yet proven)"
+    runs-on: windows-2025
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # windows-2025 has WSL 2 enabled but no distribution; installing one by hand is untried here, so the action stays.
+      - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: git python3-venv python3-pip
+      # Capalith checks that its settings and catalog folders belong to the user and are not writable by others,
+      # so the tests run as a normal user and on the Linux side (not under /mnt/c), as the README will advise.
+      - shell: wsl-bash {0}
+        run: |
+          useradd --create-home runner
+          cp -r "$(wslpath -u '${{ github.workspace }}')" /home/runner/capalith
+          chown -R runner:runner /home/runner/capalith
+      - shell: wsl-bash -u runner {0}
+        run: |
+          cd ~/capalith
+          python3 -m venv ~/venv
+          ~/venv/bin/python -m pip install --require-hashes -r requirements-linux-py312.txt
+          PYTHONWARNINGS=error ~/venv/bin/python -m unittest discover -s tests -v

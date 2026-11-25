@@ -9,6 +9,11 @@ ROOT = Path(__file__).parents[1]
 
 
 class DistributionTests(unittest.TestCase):
+    def test_ranking_key_guidance_explains_organization_billing_and_visibility(self):
+        guidance = (ROOT / "docs/ranking.md").read_text(encoding="utf-8")
+        self.assertIn("Spending draws on your organization's credits, and any organization member can see its key list.", guidance)
+        self.assertIn("https://help.typesafe.ai/articles/8310295754-who-can-create-and-manage-api-keys", guidance)
+
     def test_package_declares_existing_runtime(self) -> None:
         config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         project = config["project"]
@@ -33,6 +38,7 @@ class DistributionTests(unittest.TestCase):
                 "mcp-types==2.1.1",
                 "pydantic==2.13.5",
                 "fastembed==0.8.0",
+                "numpy==2.4.6",
                 "huggingface-hub==1.29.0",
             },
             set(project["dependencies"]),
@@ -55,6 +61,9 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(["capalith"], config["tool"]["setuptools"]["packages"])
         self.assertEqual(
             [
+                "model-profiles.json",
+                "ranking-policy.json",
+                "settings-defaults.json",
                 "skills/capalith/SKILL.md",
                 "skills/capalith/references/*.md",
             ],
@@ -107,7 +116,7 @@ class DistributionTests(unittest.TestCase):
             "mcp__",
             ".hermes",
             ".agents",
-            "/home/",
+            "/" + "home" + "/",
             "hermes config",
             "codex mcp",
             "pip install",

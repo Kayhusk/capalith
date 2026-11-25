@@ -4,6 +4,7 @@ import io
 import json
 import os
 import sqlite3
+from contextlib import closing
 import subprocess
 import tempfile
 import unittest
@@ -386,7 +387,7 @@ class CliTests(unittest.TestCase):
                 )
                 succeed(self, database, "scan", source_id)
 
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 revisions = {
                     commit: (identifier, last_seen_at)
                     for identifier, commit, last_seen_at in connection.execute(
